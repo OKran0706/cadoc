@@ -1,0 +1,25 @@
+# canary-system/Dockerfile.verifier
+# Multi-stage Go build for chain verifier.
+# Produces: chain-verifier binary
+
+FROM golang:1.26-alpine AS builder
+
+RUN apk add --no-cache git ca-certificates
+
+WORKDIR /build
+COPY src/telemetry/ .
+
+RUN go mod download
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-s -w" \
+    -o /out/chain-verifier ./cmd/verifier/
+
+# ---
+FROM scratch
+
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /out/chain-verifier /opt/canary/bin/chain-verifier
+
+ENTRYPOINT ["/opt/canary/bin/chain-verifier"]
+CMD ["--brokers", "kafka-0:9092,kafka-1:9092", "--topic", "canary-events"]

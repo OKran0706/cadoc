@@ -1,0 +1,41 @@
+# canary-system/ebpf/falco-canary-rules.yaml
+# Derived from: file-canary-engine/SKILL.md — Falco Rules
+
+- list: canary_file_paths
+  items: []  # populated via Falco hot-reload from canary-map.json
+
+- list: known_safe_processes
+  items:
+    - canary-deployer
+    - canary-rotator
+    - canary-cleaner
+
+- rule: Canary File Read
+  desc: Any process opened a canary file
+  condition: >
+    open_read and
+    fd.name in (canary_file_paths) and
+    not proc.name in (known_safe_processes)
+  output: >
+    CANARY_ACCESS fd=%fd.name proc=%proc.name pid=%proc.pid
+    user=%user.name container=%container.id
+  priority: CRITICAL
+  tags: [canary, filesystem]
+
+- rule: Canary File Metadata Change
+  desc: chmod or chown applied to a canary file
+  condition: >
+    (syscall.type = chmod or syscall.type = chown) and
+    fd.name in (canary_file_paths)
+  output: >
+    CANARY_METADATA_CHANGE fd=%fd.name proc=%proc.name pid=%proc.pid
+  priority: CRITICAL
+  tags: [canary, tampering]
+
+- rule: Canary Bulk Read Pattern
+  desc: More than 3 canary files accessed within 30 seconds
+  condition: >
+    open_read and fd.name in (canary_file_paths)
+  output: CANARY_BULK_ACCESS fd=%fd.name proc=%proc.name
+  priority: CRITICAL
+  tags: [canary, bulk-enumeration]

@@ -1,0 +1,31 @@
+# canary-system/requirements.txt
+# Python-only dependencies (Go components have their own go.mod files)
+# Components: detection-engine, alert-response, db-canary
+
+# Kafka
+kafka-python==2.0.2
+
+# PostgreSQL
+psycopg2-binary==2.9.9
+
+# Kubernetes API client
+kubernetes==28.1.0
+
+# HTTP — PagerDuty, Slack, remote log
+requests==2.31.0
+
+# MySQL log tailing
+tailer==0.4.1
+
+# Time handling
+python-dateutil==2.8.2
+pytz==2024.1
+
+# LDAP enrichment (optional)
+python-ldap==3.4.3
+
+# YAML config parsing
+PyYAML>=6.0.1
+
+# Schema Validation
+jsonschema==4.21.1

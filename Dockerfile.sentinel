@@ -1,0 +1,32 @@
+# canary-system/Dockerfile.sentinel
+# Multi-stage Go build for sentinel daemon binaries.
+# Produces: sentinel-a, sentinel-b, sentinel-verify
+
+FROM golang:1.26-alpine AS builder
+
+RUN apk add --no-cache git ca-certificates
+
+WORKDIR /build
+COPY src/sentinel/ .
+
+# Download dependencies
+RUN go mod download
+
+# Build static binaries
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-s -w" \
+    -o /out/sentinel-a ./cmd/sentinel-a/
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-s -w" \
+    -o /out/sentinel-b ./cmd/sentinel-b/
+
+# ---
+FROM scratch
+
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /out/sentinel-a /opt/sentinel/bin/sentinel-a
+COPY --from=builder /out/sentinel-b /opt/sentinel/bin/sentinel-b
+
+ENTRYPOINT ["/opt/sentinel/bin/sentinel-a"]
+CMD ["--config", "/opt/sentinel/config/sentinel.yaml"]

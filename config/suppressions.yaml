@@ -1,0 +1,33 @@
+# canary-system/config/suppressions.yaml
+# Derived from: detection-engine/SKILL.md — False-Positive Suppression
+
+# These affect TIER 2 (behavioral) rules only.
+# TIER 1 (canary asset access) is NEVER suppressed.
+
+suppressions:
+  - rule_id: DB_SCHEMA_ENUM
+    actor_pattern: "^ci-migration-.*"
+    reason: "CI database migration runner — queries schema heavily"
+    window: "0 1 * * *"
+    expires: "2026-06-01"
+
+  - rule_id: BULK_CANARY_FILE_READ
+    process_name: "bacula-fd"
+    reason: "Backup agent stats all files during backup window"
+    note: "Only stat() events suppressed — read() events still alert"
+    file_events_suppressed: [stat]
+    file_events_active: [access, open]
+
+  - rule_id: HIGH_VOLUME_PVC_READ
+    pod_label: "app=velero"
+    reason: "Velero backup reads PVCs in bulk during scheduled windows"
+    window: "0 2 * * *"
+
+  - rule_id: ALERT_SENTINEL_TAMPER
+    process_pattern: ".*ansible-tmp-.*"
+    actor_ip_cidr: "10.0.1.0/24"
+    reason: "Allow CI/CD Ansible playbook to overwrite Sentinel binaries during deployment"
+    note: "Restricted to the Security Team's CI/CD network block"
+
+last_reviewed: "2026-03-18"
+next_review: "2026-06-18"

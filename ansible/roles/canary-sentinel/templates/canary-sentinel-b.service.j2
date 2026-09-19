@@ -1,0 +1,33 @@
+# canary-system/ansible/roles/canary-sentinel/templates/canary-sentinel-b.service.j2
+
+[Unit]
+Description=Canary Sentinel B — Watchdog Process
+After=network-online.target
+Wants=network-online.target
+BindsTo=canary-sentinel-a.service
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/python3.11 /opt/sentinel/bin/sentinel_b.py --config /opt/sentinel/config/sentinel.yaml
+Restart=always
+RestartSec=5
+
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN
+ReadWritePaths=/run/canary /opt/sentinel/logs
+ReadOnlyPaths=/opt/sentinel/config /etc/canary
+WatchdogSec=30
+NotifyAccess=main
+
+SystemCallFilter=@system-service @basic-io @network-io @signal
+SystemCallErrorNumber=EPERM
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=canary-sentinel-b
+
+[Install]
+WantedBy=multi-user.target

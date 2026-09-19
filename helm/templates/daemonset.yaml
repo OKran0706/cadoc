@@ -1,0 +1,59 @@
+# canary-system/helm/templates/daemonset.yaml
+# Derived from: pvc-watchdog/SKILL.md — Node-Level eBPF Agent
+
+{{- if .Values.nodeAgent.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: canary-node-agent
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: canary-system
+    app.kubernetes.io/component: node-agent
+spec:
+  selector:
+    matchLabels:
+      app: canary-node-agent
+  template:
+    metadata:
+      labels:
+        app: canary-node-agent
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      hostPID: true
+      hostNetwork: false
+      containers:
+        - name: canary-agent
+          image: "{{ .Values.nodeAgent.image.repository }}:{{ .Values.nodeAgent.image.tag }}"
+          securityContext:
+            privileged: true   # Required for eBPF loading
+          env:
+            - name: CANARY_KAFKA_BROKERS
+              value: {{ .Values.kafka.brokers | quote }}
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: bpf
+              mountPath: /sys/fs/bpf
+            - name: tracefs
+              mountPath: /sys/kernel/debug/tracing
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: bpf
+          hostPath:
+            path: /sys/fs/bpf
+        - name: tracefs
+          hostPath:
+            path: /sys/kernel/debug/tracing
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
+{{- end }}

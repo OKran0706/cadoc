@@ -1,0 +1,17 @@
+# canary-system/config/profiles/k8s-node.yaml
+# Derived from: file-canary-engine/SKILL.md
+profile: k8s-node
+target_directories:
+  - path: /etc/kubernetes
+    canary_type: kubeconfig_backup
+    count: 1
+  - path: /var/lib/kubelet
+    canary_type: serviceaccount_token
+    count: 1
+  - path: /root
+    canary_type: credentials
+    count: 1
+
+naming_strategy: contextual
+timestamp_strategy: blend
+permission_strategy: inherit

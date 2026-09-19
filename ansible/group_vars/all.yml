@@ -1,0 +1,42 @@
+# canary-system/ansible/group_vars/all.yml
+# Derived from: deployment/SKILL.md — Global Ansible Variables
+
+canary_version: "1.0.0"
+canary_python_version: "3.11"
+
+# Kafka
+canary_kafka_brokers:
+  - "kafka-0:9092"
+  - "kafka-1:9092"
+  - "kafka-2:9092"
+
+# TLS
+canary_tls_ca_cert: "{{ vault_tls_ca_cert }}"
+canary_tls_cert: "{{ vault_tls_cert }}"
+canary_tls_key: "{{ vault_tls_key }}"
+
+# Vault
+vault_addr: "https://vault.internal:8200"
+vault_role: "canary-system"
+
+# Signing key (Internal events)
+canary_signing_key_path: "/opt/sentinel/keys/ed25519.priv"
+canary_signing_pubkey_path: "/opt/sentinel/keys/ed25519.pub"
+
+# Software Supply Chain Validation
+canary_artifact_base_url: "https://artifacts.internal/canary"
+canary_cosign_pubkey_path: "/etc/canary/cosign.pub"
+
+# Remote log endpoint
+canary_remote_log_endpoint: "https://logs.internal:6514"
+
+# S3
+canary_s3_bucket: "canary-logs-immutable"
+canary_s3_region: "us-east-1"
+
+# Alert endpoints
+canary_pagerduty_key: "{{ vault_pagerduty_key }}"
+canary_slack_webhook: "{{ vault_slack_webhook }}"
+
+# Host quarantine
+canary_security_team_ip: "10.0.1.0/24"

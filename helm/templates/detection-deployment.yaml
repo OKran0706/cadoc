@@ -1,0 +1,54 @@
+# canary-system/helm/templates/detection-deployment.yaml
+# Derived from: deployment/SKILL.md — Detection Engine Deployment
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canary-detection-engine
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: canary-system
+    app.kubernetes.io/component: detection-engine
+spec:
+  replicas: {{ .Values.detection.replicas }}
+  selector:
+    matchLabels:
+      app: canary-detection-engine
+  template:
+    metadata:
+      labels:
+        app: canary-detection-engine
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      containers:
+        - name: detection-engine
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          command: ["python3", "-m", "detection_engine.engine"]
+          env:
+            - name: CANARY_KAFKA_BROKERS
+              value: {{ .Values.kafka.brokers | quote }}
+            - name: CANARY_DB_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: canary-system-secrets
+                  key: db-conn
+            - name: CANARY_PAGERDUTY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: canary-system-secrets
+                  key: pagerduty-key
+            - name: CANARY_SLACK_WEBHOOK
+              valueFrom:
+                secretKeyRef:
+                  name: canary-system-secrets
+                  key: slack-webhook
+          volumeMounts:
+            - name: config
+              mountPath: /opt/canary/config
+              readOnly: true
+          resources:
+            {{- toYaml .Values.detection.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: canary-config

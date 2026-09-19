@@ -1,0 +1,39 @@
+# canary-system/config/sentinel.yaml
+# Derived from: sentinel-daemon/SKILL.md — Main Configuration
+
+signing:
+  algorithm: ed25519
+  key_source: file           # "tpm" (preferred) | "file" | "vault"
+  tpm_handle: "0x81000001"   # Persistent key handle in TPM2
+  key_file: /opt/sentinel/keys/ed25519.priv
+  vault_path: "secret/canary/signing-key"
+
+telemetry:
+  kafka_brokers: ["kafka-0:9092", "kafka-1:9092"]
+  topic: "canary-events"
+  tls: true
+  client_cert: /etc/canary/tls/client.crt
+  client_key: /etc/canary/tls/client.key
+  ca_cert: /etc/canary/tls/ca.crt
+  vector_socket: /run/canary/vector.sock
+
+oob_alert:
+  url: "https://hooks.pagerduty.com/..."
+  method: POST
+  timeout_seconds: 10
+  retry_count: 3
+
+watchdog:
+  heartbeat_interval_seconds: 5
+  alert_threshold_seconds: 15
+  peer_socket: "/run/canary/sentinel-heartbeat.sock"
+
+log_integrity:
+  chain_algorithm: sha256
+  local_log: /opt/sentinel/logs/local-chain.log
+
+self_protection:
+  monitor_own_pid: true
+  monitor_signals: [SIGKILL, SIGSTOP, SIGTERM]
+  alert_on_ptrace_attach: true
+  alert_on_proc_modification: true

@@ -1,0 +1,21 @@
+# canary-system/helm/templates/canary-pvc.yaml
+# Derived from: pvc-watchdog/SKILL.md — Canary PVC Provisioning
+
+{{- if .Values.canaryPVC.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: canary-storage
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: canary-system
+    app.kubernetes.io/component: canary-pvc
+    canary: "true"
+spec:
+  accessModes:
+    {{- toYaml .Values.canaryPVC.accessModes | nindent 4 }}
+  storageClassName: {{ .Values.canaryPVC.storageClass }}
+  resources:
+    requests:
+      storage: {{ .Values.canaryPVC.size }}
+{{- end }}

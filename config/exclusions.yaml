@@ -1,0 +1,17 @@
+# canary-system/config/exclusions.yaml
+# Derived from: file-canary-engine/SKILL.md — Exclusions
+
+# Processes exempt from STAT/GETATTR alerts only (not from READ alerts)
+stat_exclusions:
+  - process: "bacula-fd"
+    reason: "Backup agent stats all files"
+  - process: "clamscan"
+    reason: "AV scanner"
+  - process: "canary-cleaner"
+    reason: "Canary cleanup process"
+  - process: "canary-rotator"
+    reason: "Canary rotation process"
+
+# These are NEVER exempt — any access is an alert
+read_exclusions: []
+execute_exclusions: []

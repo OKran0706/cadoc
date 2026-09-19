@@ -1,0 +1,12 @@
+# canary-system/helm/Chart.yaml
+# Derived from: deployment/SKILL.md + pvc-watchdog/SKILL.md
+
+apiVersion: v2
+name: canary-system
+description: Kubernetes components for the Canary Detection System
+version: 1.0.0
+appVersion: "1.0.0"
+type: application
+maintainers:
+  - name: Security Engineering
+    email: security@internal

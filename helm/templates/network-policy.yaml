@@ -1,0 +1,46 @@
+# canary-system/helm/templates/network-policy.yaml
+# Derived from: deployment/SKILL.md — Network Policies
+
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: canary-system-network-policy
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: canary-system
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []  # No inbound traffic needed
+  egress:
+    # Allow Kafka communication
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app: kafka
+      ports:
+        - port: 9092
+          protocol: TCP
+    # Allow DNS
+    - to: []
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Allow PostgreSQL
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 5432
+          protocol: TCP
+    # Allow PagerDuty/Slack (HTTPS)
+    - to: []
+      ports:
+        - port: 443
+          protocol: TCP
+{{- end }}

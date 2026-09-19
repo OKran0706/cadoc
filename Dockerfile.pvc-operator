@@ -1,0 +1,25 @@
+# canary-system/Dockerfile.pvc-operator
+# Multi-stage Go build for PVC watchdog operator.
+# Produces: pvc-operator binary
+
+FROM golang:1.26-alpine AS builder
+
+RUN apk add --no-cache git ca-certificates
+
+WORKDIR /build
+COPY src/pvc_watchdog/ .
+
+RUN go mod download
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-s -w" \
+    -o /out/pvc-operator ./cmd/operator/
+
+# ---
+FROM scratch
+
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /out/pvc-operator /opt/canary/bin/pvc-operator
+
+ENTRYPOINT ["/opt/canary/bin/pvc-operator"]
+CMD ["--config", "/etc/canary/watchdog.yaml"]

@@ -1,0 +1,154 @@
+# canary-system/ansible/roles/canary-sentinel/tasks/main.yml
+# Derived from: deployment/SKILL.md — Sentinel Go Binary Deployment
+
+- name: Download sentinel Go binaries from artifact registry
+  get_url:
+    url: "{{ canary_artifact_base_url }}/sentinel/{{ canary_version }}/{{ item }}-linux-amd64"
+    dest: "/opt/sentinel/bin/{{ item }}"
+    mode: "0755"
+    owner: root
+    group: root
+    checksum: "sha256:{{ lookup('url', canary_artifact_base_url + '/sentinel/' + canary_version + '/' + item + '-linux-amd64.sha256') }}"
+  loop:
+    - sentinel-a
+    - sentinel-b
+
+- name: Verify signature of sentinel Go binaries
+  command: >
+    cosign verify-blob
+    --key {{ canary_cosign_pubkey_path }}
+    --signature {{ canary_artifact_base_url }}/sentinel/{{ canary_version }}/{{ item }}-linux-amd64.sig
+    /opt/sentinel/bin/{{ item }}
+  loop:
+    - sentinel-a
+    - sentinel-b
+
+- name: Download sentinel SBOMs
+  get_url:
+    url: "{{ canary_artifact_base_url }}/sentinel/{{ canary_version }}/{{ item }}-linux-amd64.sbom.json"
+    dest: "/opt/sentinel/bin/{{ item }}.sbom.json"
+    mode: "0644"
+    owner: root
+    group: root
+  loop:
+    - sentinel-a
+    - sentinel-b
+
+- name: Scan sentinel SBOMs for vulnerabilities
+  command: >
+    grype sbom:/opt/sentinel/bin/{{ item }}.sbom.json --fail-on medium
+  loop:
+    - sentinel-a
+    - sentinel-b
+  environment:
+    GRYPE_CHECK_FOR_APP_UPDATE: "false"
+
+- name: Deploy sentinel configuration
+  template:
+    src: sentinel.yaml.j2
+    dest: /opt/sentinel/config/sentinel.yaml
+    mode: "0600"
+    owner: root
+  notify: Restart sentinel
+
+- name: Generate Ed25519 signing key if not present
+  command: openssl genpkey -algorithm ed25519 -out {{ canary_signing_key_path }}
+  args:
+    creates: "{{ canary_signing_key_path }}"
+
+- name: Extract public key
+  command: >
+    openssl pkey -in {{ canary_signing_key_path }}
+    -pubout -out {{ canary_signing_pubkey_path }}
+  args:
+    creates: "{{ canary_signing_pubkey_path }}"
+
+- name: Set signing key permissions
+  file:
+    path: "{{ canary_signing_key_path }}"
+    owner: root
+    group: root
+    mode: "0400"
+
+- name: Deploy seccomp profile
+  copy:
+    src: sentinel-seccomp.json
+    dest: /opt/sentinel/config/seccomp/sentinel-seccomp.json
+    mode: "0644"
+
+- name: Deploy systemd unit files
+  template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "0644"
+  loop:
+    - { src: canary-sentinel-a.service.j2, dest: /etc/systemd/system/canary-sentinel-a.service }
+    - { src: canary-sentinel-b.service.j2, dest: /etc/systemd/system/canary-sentinel-b.service }
+    - { src: canary-verify.service.j2, dest: /etc/systemd/system/canary-verify.service }
+  notify:
+    - Reload systemd
+    - Restart sentinel
+
+- name: Download canary-verify Go binary
+  get_url:
+    url: "{{ canary_artifact_base_url }}/verify/{{ canary_version }}/canary-verify-linux-amd64"
+    dest: "/opt/canary-verify/bin/canary-verify"
+    mode: "0755"
+    owner: canary-verify
+    group: canary-verify
+    checksum: "sha256:{{ lookup('url', canary_artifact_base_url + '/verify/' + canary_version + '/canary-verify-linux-amd64.sha256') }}"
+
+- name: Verify signature of canary-verify Go binary
+  command: >
+    cosign verify-blob
+    --key {{ canary_cosign_pubkey_path }}
+    --signature {{ canary_artifact_base_url }}/verify/{{ canary_version }}/canary-verify-linux-amd64.sig
+    /opt/canary-verify/bin/canary-verify
+
+- name: Download canary-verify SBOM
+  get_url:
+    url: "{{ canary_artifact_base_url }}/verify/{{ canary_version }}/canary-verify-linux-amd64.sbom.json"
+    dest: "/opt/canary-verify/bin/canary-verify.sbom.json"
+    mode: "0644"
+    owner: canary-verify
+    group: canary-verify
+
+- name: Scan canary-verify SBOM for vulnerabilities
+  command: >
+    grype sbom:/opt/canary-verify/bin/canary-verify.sbom.json --fail-on medium
+  environment:
+    # Fail deployment if any medium or above vulns are found in the SBOM
+    GRYPE_CHECK_FOR_APP_UPDATE: "false"
+
+- name: Create verify env file
+  copy:
+    content: "CANARY_WEBHOOK_URL={{ canary_verifier_webhook_url }}"
+    dest: /etc/canary/verify.env
+    mode: "0600"
+    owner: canary-verify
+    group: root
+
+- name: Enable and start sentinel services
+  systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop:
+    - canary-sentinel-a
+    - canary-sentinel-b
+    - canary-verify
+
+handlers:
+  - name: Reload systemd
+    systemd:
+      daemon_reload: true
+
+  - name: Restart sentinel
+    systemd:
+      name: "{{ item }}"
+      state: restarted
+    loop:
+      - canary-sentinel-a
+      - canary-sentinel-b
+      - canary-verify

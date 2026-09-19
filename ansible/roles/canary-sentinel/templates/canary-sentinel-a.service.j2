@@ -1,0 +1,37 @@
+# canary-system/ansible/roles/canary-sentinel/templates/canary-sentinel-a.service.j2
+# Derived from: sentinel-daemon/SKILL.md — systemd Hardening
+
+[Unit]
+Description=Canary Sentinel A — Primary Event Collector
+After=network-online.target
+Wants=network-online.target
+BindsTo=canary-sentinel-b.service
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/python3.11 /opt/sentinel/bin/sentinel_a.py --config /opt/sentinel/config/sentinel.yaml
+Restart=always
+RestartSec=5
+
+# Hardening
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN
+ReadWritePaths=/run/canary /opt/sentinel/logs
+ReadOnlyPaths=/opt/sentinel/config /etc/canary
+WatchdogSec=30
+NotifyAccess=main
+
+# Seccomp
+SystemCallFilter=@system-service @basic-io @network-io @signal
+SystemCallErrorNumber=EPERM
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=canary-sentinel-a
+
+[Install]
+WantedBy=multi-user.target

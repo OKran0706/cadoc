@@ -1,0 +1,27 @@
+[Unit]
+Description=Canary Independent Verification Agent
+After=network.target
+
+[Service]
+Type=simple
+User=canary-verify
+Group=canary-verify
+ExecStart=/opt/canary-verify/bin/canary-verify
+Restart=always
+RestartSec=10
+
+# Zero privileges
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/
+CapabilityBoundingSet=
+AmbientCapabilities=
+SecureBits=noroot-locked
+
+# Required configuration
+EnvironmentFile=/etc/canary/verify.env
+
+[Install]
+WantedBy=multi-user.target

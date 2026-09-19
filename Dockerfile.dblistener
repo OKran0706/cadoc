@@ -1,0 +1,11 @@
+FROM python:3.11-slim
+
+WORKDIR /opt/canary
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src/ /opt/canary/src/
+
+ENV PYTHONPATH=/opt/canary/src
+CMD ["python3", "-m", "db_canary.listener"]

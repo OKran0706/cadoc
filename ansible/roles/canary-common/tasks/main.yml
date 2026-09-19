@@ -1,0 +1,91 @@
+# canary-system/ansible/roles/canary-common/tasks/main.yml
+# Derived from: deployment/SKILL.md — Common Prerequisites
+
+- name: Install Python 3.11 and dependencies
+  apt:
+    name:
+      - python3.11
+      - python3.11-venv
+      - python3-pip
+      - jq
+      - inotify-tools
+      - tpm2-tools
+      - openssl
+    state: present
+    update_cache: true
+
+- name: Create canary directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: canary
+    mode: "0750"
+  loop:
+    - /opt/canary
+    - /opt/canary/config
+    - /opt/canary/config/profiles
+    - /opt/canary/logs
+    - /opt/canary/templates
+    - /opt/sentinel
+    - /opt/sentinel/config
+    - /opt/sentinel/keys
+    - /opt/sentinel/logs
+    - /run/canary
+    - /etc/canary/tls
+
+- name: Create canary system group
+  group:
+    name: canary
+    system: true
+
+- name: Create canary-verify group
+  group:
+    name: canary-verify
+    system: true
+
+- name: Create canary system user
+  user:
+    name: canary
+    group: canary
+    system: true
+    shell: /usr/sbin/nologin
+    home: /opt/canary
+
+- name: Create canary-verify user
+  user:
+    name: canary-verify
+    group: canary-verify
+    system: true
+    shell: /usr/sbin/nologin
+    home: /opt/canary-verify
+
+- name: Install Python requirements
+  pip:
+    requirements: /opt/canary/requirements.txt
+    executable: pip3.11
+
+- name: Create canary-verify directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: canary-verify
+    group: canary-verify
+    mode: "0750"
+  loop:
+    - /opt/canary-verify
+    - /opt/canary-verify/bin
+
+- name: Deploy TLS certificates from Vault
+  copy:
+    content: "{{ item.content }}"
+    dest: "{{ item.dest }}"
+    mode: "0600"
+    owner: canary
+    group: canary
+  loop:
+    - { content: "{{ canary_tls_ca_cert }}", dest: "/etc/canary/tls/ca.crt" }
+    - { content: "{{ canary_tls_cert }}", dest: "/etc/canary/tls/client.crt" }
+    - { content: "{{ canary_tls_key }}", dest: "/etc/canary/tls/client.key" }
+  no_log: true
+

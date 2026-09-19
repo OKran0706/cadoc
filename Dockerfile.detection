@@ -1,0 +1,12 @@
+FROM python:3.11-slim
+
+WORKDIR /opt/canary
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src/ /opt/canary/src/
+COPY config/ /opt/canary/config/
+
+ENV PYTHONPATH=/opt/canary/src
+CMD ["python3", "-m", "detection_engine.engine"]

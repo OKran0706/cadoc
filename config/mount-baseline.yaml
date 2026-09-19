@@ -1,0 +1,11 @@
+# canary-system/config/mount-baseline.yaml
+# Derived from: pvc-watchdog/SKILL.md — Mount Baseline
+# Auto-generated — do not edit manually
+# Regenerate with: canary-watchdog baseline --regenerate --days 14
+
+version: "2026-01-15"
+locked: true
+mounts:
+  "api-server/postgres-data": { approved: true, first_seen: "2025-09-01" }
+  "worker/uploads-vol": { approved: true, first_seen: "2025-09-01" }
+  "migration-job/postgres-data": { approved: true, first_seen: "2025-10-15" }

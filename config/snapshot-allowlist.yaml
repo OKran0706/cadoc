@@ -1,0 +1,16 @@
+# canary-system/config/snapshot-allowlist.yaml
+# Derived from: pvc-watchdog/SKILL.md — VolumeSnapshot Allowlist
+allowlist:
+  - service_account: "velero"
+    namespace: "velero"
+    reason: "Backup system"
+    windows:
+      - cron: "0 2 * * *"
+        duration_minutes: 120
+
+  - service_account: "db-backup-operator"
+    namespace: "database"
+    reason: "Database backup operator"
+    windows:
+      - cron: "0 3 * * 0"
+        duration_minutes: 180

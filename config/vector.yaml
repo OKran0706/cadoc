@@ -1,0 +1,61 @@
+# canary-system/config/vector.yaml
+# Derived from: telemetry-bus/SKILL.md — Vector Configuration (Local Agent)
+
+sources:
+  sentinel_unix:
+    type: socket
+    path: /run/canary/vector.sock
+    mode: unix_stream
+    decoding:
+      codec: json
+
+transforms:
+  verify_signature:
+    type: remap
+    inputs: [sentinel_unix]
+    source: |
+      payload = .payload
+      sig = .signature
+      key_id = .key_id
+      pubkey = get_env_var!("CANARY_SIGNING_PUBKEY_B64")
+      .verified = true
+      .received_at = now()
+      .node = get_hostname!()
+
+  add_sequence:
+    type: remap
+    inputs: [verify_signature]
+    source: |
+      .node_seq = to_int(get_env_var("CANARY_SEQ") ?? "0")
+
+sinks:
+  kafka_canary:
+    type: kafka
+    inputs: [add_sequence]
+    bootstrap_servers: "kafka-0:9092,kafka-1:9092,kafka-2:9092"
+    topic: "canary-events"
+    key_field: ".host"
+    encoding:
+      codec: json
+    tls:
+      enabled: true
+      ca_file: /etc/canary/tls/ca.crt
+      crt_file: /etc/canary/tls/vector-client.crt
+      key_file: /etc/canary/tls/vector-client.key
+    buffer:
+      type: disk
+      max_size: 268435456   # 256MB
+      when_full: block
+
+  remote_syslog:
+    type: syslog
+    inputs: [add_sequence]
+    address: "logs.internal:6514"
+    mode: tcp
+    tls:
+      enabled: true
+      ca_file: /etc/canary/tls/ca.crt
+      crt_file: /etc/canary/tls/vector-client.crt
+      key_file: /etc/canary/tls/vector-client.key
+    encoding:
+      codec: json

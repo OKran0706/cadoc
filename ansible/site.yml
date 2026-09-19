@@ -1,0 +1,51 @@
+# canary-system/ansible/site.yml
+# Derived from: deployment/SKILL.md — Master Playbook
+# CRITICAL: order of roles follows deployment dependency chain
+
+- name: Deploy Canary Detection System
+  hosts: all
+  become: true
+  vars_files:
+    - group_vars/all.yml
+
+  roles:
+    # Phase 0: Common prerequisites (Python, packages, TLS certs)
+    - role: canary-common
+      tags: [common, prerequisites]
+
+    # Phase 1: Sentinel daemon (MUST be first — all events depend on it)
+    - role: canary-sentinel
+      tags: [sentinel]
+
+    # Phase 2: Telemetry bus (Vector + Kafka topics)
+    - role: canary-telemetry
+      tags: [telemetry]
+
+    # Phase 3: File canary deployment
+    - role: canary-files
+      tags: [files, canary]
+
+    # Phase 4: Database canary mesh (PostgreSQL/MySQL)
+    - role: canary-db
+      tags: [database, canary]
+      when: "'db_servers' in group_names"
+
+    # Phase 5: Detection engine
+    - role: canary-detection
+      tags: [detection]
+
+    # Phase 6: Alert response configuration
+    - role: canary-alerts
+      tags: [alerts, response]
+
+  post_tasks:
+    - name: Run post-deploy validation
+      script: ../scripts/validate.sh
+      register: validation
+      failed_when: validation.rc != 0
+      tags: [validate]
+
+    - name: Show validation results
+      debug:
+        msg: "{{ validation.stdout_lines }}"
+      tags: [validate]
