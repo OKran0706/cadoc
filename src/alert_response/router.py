@@ -9,24 +9,25 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from alert_response import pagerduty, slack
+from alert_response import webhook, slack
 
 logger = logging.getLogger("alert.router")
 
 # Alert routing matrix from alert-response/SKILL.md
 ROUTING_MATRIX = {
-    "FILE_CANARY_READ":           {"pagerduty": "P1", "slack": True, "siem": True, "auto_response": "quarantine_candidate"},
-    "CANARY_FILE_METADATA_CHANGE":{"pagerduty": "P1", "slack": True, "siem": True, "auto_response": None},
-    "CANARY_PVC_ACCESSED":        {"pagerduty": "P1", "slack": True, "siem": True, "auto_response": "isolate_pod"},
-    "CANARY_PVC_MOUNTED":         {"pagerduty": "P1", "slack": True, "siem": True, "auto_response": "isolate_pod"},
-    "CANARY_PVC_SNAPSHOT":        {"pagerduty": "P1", "slack": True, "siem": True, "auto_response": "freeze_snapshot"},
-    "DB_CANARY_TABLE_ACCESS":     {"pagerduty": "P1", "slack": True, "siem": True, "auto_response": "revoke_db_session"},
-    "SENTINEL_KILL_ATTEMPT":      {"pagerduty": "P1", "slack": True, "siem": True, "auto_response": "lock_host"},
-    "LOG_CHAIN_BREAK":            {"pagerduty": "P1", "slack": True, "siem": True, "auto_response": "forensic_snapshot"},
-    "BULK_CANARY_FILE_READ":      {"pagerduty": "P2", "slack": True, "siem": True, "auto_response": "isolate_pod"},
-    "DB_SCHEMA_ENUM":             {"pagerduty": None, "slack": True, "siem": True, "auto_response": "revoke_db_session"},
-    "OFF_HOURS_PVC_ACCESS":       {"pagerduty": None, "slack": True, "siem": True, "auto_response": None},
-    "HIGH_VOLUME_PVC_READ":       {"pagerduty": "P1", "slack": True, "siem": True, "auto_response": "isolate_pod"},
+    "FILE_CANARY_READ":           {"webhook": "P1", "slack": True, "siem": True, "auto_response": "quarantine_candidate"},
+    "CANARY_FILE_METADATA_CHANGE":{"webhook": "P1", "slack": True, "siem": True, "auto_response": None},
+    "CANARY_PVC_ACCESSED":        {"webhook": "P1", "slack": True, "siem": True, "auto_response": "isolate_pod"},
+    "CANARY_PVC_MOUNTED":         {"webhook": "P1", "slack": True, "siem": True, "auto_response": "isolate_pod"},
+    "CANARY_PVC_SNAPSHOT":        {"webhook": "P1", "slack": True, "siem": True, "auto_response": "freeze_snapshot"},
+    "DB_CANARY_TABLE_ACCESS":     {"webhook": "P1", "slack": True, "siem": True, "auto_response": "revoke_db_session"},
+    "SENTINEL_KILL_ATTEMPT":      {"webhook": "P1", "slack": True, "siem": True, "auto_response": "lock_host"},
+    "LOG_CHAIN_BREAK":            {"webhook": "P1", "slack": True, "siem": True, "auto_response": "forensic_snapshot"},
+    "BULK_CANARY_FILE_READ":      {"webhook": "P2", "slack": True, "siem": True, "auto_response": "isolate_pod"},
+    "DB_SCHEMA_ENUM":             {"webhook": None, "slack": True, "siem": True, "auto_response": "revoke_db_session"},
+    "OFF_HOURS_PVC_ACCESS":       {"webhook": None, "slack": True, "siem": True, "auto_response": None},
+    "HIGH_VOLUME_PVC_READ":       {"webhook": "P1", "slack": True, "siem": True, "auto_response": "isolate_pod"},
+    "MASS_OUTAGE_DETECTED":       {"webhook": "P1", "slack": True, "siem": True, "auto_response": None},
 }
 
 
@@ -65,16 +66,16 @@ class AlertRouter:
             alert["ts"] = datetime.now(timezone.utc).isoformat()
 
         logger.info(
-            "Routing alert: rule=%s priority=%s",
-            rule_id, routing.get("pagerduty", "none"),
+            "Routing alert: rule=%s webhook_priority=%s",
+            rule_id, routing.get("webhook", "none"),
         )
 
-        # PagerDuty
-        if routing.get("pagerduty"):
+        # Plug-and-Play Webhook (Replaces PagerDuty for zero-cost routing)
+        if routing.get("webhook"):
             try:
-                pagerduty.page(alert)
+                webhook.dispatch(alert)
             except Exception as e:
-                logger.error("PagerDuty routing failed: %s", e)
+                logger.error("Webhook routing failed: %s", e)
 
         # Slack
         if routing.get("slack"):

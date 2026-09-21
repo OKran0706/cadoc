@@ -35,7 +35,38 @@ Rule Engine     Behavioral Engine
 Alert Aggregator (deduplication + enrichment)
     │
     ▼
-Alert & Response pipeline
+Alert & Response pipeline (Webhooks / API)
+```
+
+---
+
+## Webhook-Driven Alert Pipeline
+
+Instead of a hardcoded vendor integration (like PagerDuty), the detection engine uses a **Plug-and-Play Webhook Dispatcher**. This allows you to route P1/P2 alerts to any HTTP endpoint (e.g., your custom zero-cost SaaS dashboard, Slack, Discord, or MS Teams).
+
+```python
+# /opt/canary/detection/engine/dispatcher.py
+import requests
+import os
+
+WEBHOOK_URL = os.getenv("CANARY_WEBHOOK_URL", "http://your-saas.com/api/alerts/canary")
+WEBHOOK_TOKEN = os.getenv("CANARY_WEBHOOK_TOKEN", "")
+
+def dispatch_alert(alert: dict):
+    """Sends the JSON alert payload to the configured webhook."""
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {WEBHOOK_TOKEN}"
+    }
+    
+    try:
+        resp = requests.post(WEBHOOK_URL, json=alert, headers=headers, timeout=5)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"FAILED TO DISPATCH ALERT to {WEBHOOK_URL}: {e}")
+        # Fallback logic: write to emergency local file
+        with open("/var/log/canary/emergency_alerts.json", "a") as f:
+            f.write(json.dumps(alert) + "\n")
 ```
 
 ---
