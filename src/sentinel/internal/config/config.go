@@ -19,6 +19,14 @@ type Config struct {
 	Watchdog       WatchdogConfig       `yaml:"watchdog"`
 	LogIntegrity   LogIntegrityConfig   `yaml:"log_integrity"`
 	SelfProtection SelfProtectionConfig `yaml:"self_protection"`
+	Maintenance    MaintenanceConfig    `yaml:"maintenance"`
+}
+
+// MaintenanceConfig configures cryptographic authorization for lifecycle operations.
+// The public key is fetched from Vault at startup and held in memory only.
+type MaintenanceConfig struct {
+	VaultPath string `yaml:"vault_path"` // Vault secret path (default: secret/canary/maintenance)
+	VaultField string `yaml:"vault_field"` // Field name in the Vault secret (default: ed25519_pubkey)
 }
 
 // SigningConfig configures the Ed25519 signing key source.
@@ -90,6 +98,12 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Watchdog.AlertThresholdSeconds == 0 {
 		cfg.Watchdog.AlertThresholdSeconds = 15
+	}
+	if cfg.Maintenance.VaultPath == "" {
+		cfg.Maintenance.VaultPath = "secret/canary/maintenance"
+	}
+	if cfg.Maintenance.VaultField == "" {
+		cfg.Maintenance.VaultField = "ed25519_pubkey"
 	}
 
 	return &cfg, nil

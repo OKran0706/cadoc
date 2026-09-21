@@ -125,6 +125,10 @@ self_protection:
   monitor_signals: [SIGKILL, SIGSTOP, SIGTERM]
   alert_on_ptrace_attach: true
   alert_on_proc_modification: true
+
+maintenance:
+  vault_path: secret/canary/maintenance     # Vault secret path for the Ed25519 pubkey
+  vault_field: ed25519_pubkey               # Field name in the Vault secret
 ```
 
 ---
@@ -548,12 +552,17 @@ The kill switch allows immediate removal of all kernel-level monitoring without 
 ### Trigger methods (any of these work)
 
 a) **Ansible**: `ansible-playbook site.yml --tags kill-switch`
-b) **Vault flag**: `vault kv put secret/canary/control kill_switch=true`
-   *(Sentinel polls this flag every 60s and self-triggers if true)*
-c) **Manual**: `systemctl stop canary-sentinel-a canary-sentinel-b`
+b) **Vault signed ticket**: `vault kv put secret/canary/control killswitch_ticket=@ticket.json`
+   *(Sentinel polls this field every 60s and verifies the ticket's Ed25519 signature before activating)*
+c) **CLI with signed ticket**: `/opt/sentinel/bin/sentinel-a --auth-ticket ticket.json --action KILLSWITCH_ACTIVATE`
+
+> [!IMPORTANT]
+> The old `kill_switch=true` boolean method has been removed. All killswitch activations **must** be cryptographically signed with the offline maintenance key. An attacker with root access but without the offline key cannot activate the kill switch.
 
 ### Kill switch behavior
 
+- Verify Ed25519 signature on the killswitch ticket (reject if invalid, expired, or replayed)
+- Emit `MAINTENANCE_AUTHORIZED` event to Kafka (signed, proving the action was legitimate)
 - Unload all Tetragon TracingPolicies (`kubectl delete tracingpolicy`)
 - Stop `sentinel-a` and `sentinel-b`
 - Automatically start `inotify` fallback watcher (covers canary file reads only — reduced coverage)
@@ -570,15 +579,23 @@ c) **Manual**: `systemctl stop canary-sentinel-a canary-sentinel-b`
 - name: Activate canary kill switch
   tags: kill-switch
   block:
-    - name: Delete all Tetragon policies
-      command: kubectl delete tracingpolicy --all -n canary-system
-    - name: Stop sentinel processes
-      systemd: name={{ item }} state=stopped
-      loop: [canary-sentinel-a, canary-sentinel-b]
+    - name: Generate signed killswitch ticket
+      local_action:
+        module: command
+        cmd: >
+          /opt/canary/tools/generate-ticket
+          --key {{ maintenance_privkey_path }}
+          --action KILLSWITCH_ACTIVATE
+          --target {{ inventory_hostname }}
+          --issuer "ansible-killswitch"
+          --ttl 5m
+          --output /tmp/killswitch-ticket.json
+    - name: Push signed ticket to Vault
+      command: vault kv put secret/canary/control killswitch_ticket=@/tmp/killswitch-ticket.json
+    - name: Wait for sentinel to process ticket
+      pause: seconds=90
     - name: Start inotify fallback
       systemd: name=canary-inotify-watcher state=started enabled=yes
-    - name: Set Vault kill switch flag
-      command: vault kv put secret/canary/control kill_switch=true
 ```
 
 ---
@@ -940,6 +957,98 @@ if err := verifySelfIntegrity(); err != nil {
 ```
 
 **Rationale:** A tampered binary that starts monitoring is worse than no monitoring at all — it may silently drop events or inject false negatives.
+
+---
+
+## Cryptographic Authorization Tickets
+
+All lifecycle operations (deployment, redeployment, shutdown, killswitch) require a cryptographically signed **Authorization Ticket**. This prevents an attacker with `root` access from silently disabling the sentinel.
+
+### Key Storage
+
+The maintenance **public key** is stored in **Vault** and fetched at sentinel startup. It is held in **process memory only** — there is no on-disk key file to tamper with or delete.
+
+```bash
+# Store the pubkey in Vault (run once during initial setup)
+vault kv put secret/canary/maintenance \
+  ed25519_pubkey=@/path/to/maintenance.pub
+```
+
+The maintenance **private key** must be stored **offline** (USB, HSM, or a separate restricted Vault path). It is never present on any monitored host.
+
+### Keypair Generation
+
+```bash
+# Generate the offline maintenance keypair (run on a secure workstation)
+go run src/tools/generate-ticket/main.go --generate-keypair --key-out-dir .
+
+# Upload public key to Vault
+vault kv put secret/canary/maintenance ed25519_pubkey=@maintenance.pub
+
+# Store private key OFFLINE — NEVER on a canary-monitored host
+```
+
+### Generating a Ticket
+
+```bash
+# Shutdown a specific host
+generate-ticket --key maintenance.key --action SHUTDOWN --target app-server-1 --issuer "ops-team" --ttl 5m --output ticket.json
+
+# Redeploy with a new binary
+generate-ticket --key maintenance.key --action REDEPLOY --target app-server-1 --binary sentinel-a --new-hash abc123... --issuer "ci-pipeline" --ttl 10m --output ticket.json
+
+# Permanently decommission a host
+generate-ticket --key maintenance.key --action DEREGISTER --target app-server-old --issuer "ops-team" --ttl 5m --output ticket.json
+
+# Activate killswitch on all hosts
+generate-ticket --key maintenance.key --action KILLSWITCH_ACTIVATE --target "*" --issuer "security-team" --ttl 5m --output ticket.json
+```
+
+### Using a Ticket
+
+```bash
+# Authorized shutdown (no alerts)
+TICKET_JSON=$(cat ticket.json)
+ssh root@app-server "/opt/sentinel/bin/sentinel-a --auth-ticket-json '${TICKET_JSON}' --action SHUTDOWN"
+
+# Killswitch via Vault
+vault kv put secret/canary/control killswitch_ticket=@ticket.json
+```
+
+### Unauthorized Shutdown Detection
+
+If a `SIGTERM` is received **without** a valid ticket, sentinel emits:
+1. `UNAUTHORIZED_SHUTDOWN` event to Kafka (signed, Merkle-chained)
+2. `UNAUTHORIZED_SHUTDOWN` alert via OOB webhook (bypasses Kafka)
+
+This fires as a **P1 alert** in the detection engine.
+
+### Ticket Schema
+
+```json
+{
+  "action": "SHUTDOWN",
+  "target": "app-server-1",
+  "binary": "sentinel-a",
+  "new_hash": "",
+  "iat": "2026-03-21T21:00:00Z",
+  "exp": "2026-03-21T21:05:00Z",
+  "issuer": "ops-team",
+  "nonce": "a1b2c3d4e5f6..."
+}
+```
+
+### Security Properties
+
+| Property | How it's enforced |
+|---|---|
+| **Forgery resistance** | Ed25519 signature; attacker needs the offline private key |
+| **Replay resistance** | Unique nonce per ticket; used nonces are tracked in memory |
+| **Time-bounded** | `exp` field; tickets expire after TTL (default 5 minutes) |
+| **Host-scoped** | `target` field must match hostname or be `*` |
+| **Audit trail** | `MAINTENANCE_AUTHORIZED` event emitted to Kafka before any action |
+| **No on-disk key** | Pubkey fetched from Vault at startup, held in memory only |
+| **Delete-proof** | Deleting anything on disk makes sentinel *harder* to stop (fail-closed) |
 
 ---
 

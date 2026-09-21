@@ -303,27 +303,53 @@ Prevent alert storms from bulk events generating thousands of identical pages:
 # /opt/canary/detection/engine/deduplicator.py
 
 DEDUP_WINDOW_SECONDS = 60
+GLOBAL_ALERT_LIMIT = 50
 
 class AlertDeduplicator:
     """
-    Deduplicates alerts within a rolling window.
-    Key = (rule_id, host, actor)
-    Within the window, only the FIRST alert is forwarded.
-    Subsequent matches are counted and included in a summary flush.
+    Deduplicates alerts within a rolling window to prevent page storms.
+    - Host-Level: Deduplicates identical (rule_id, host) alerts.
+    - Global-Level: If >50 of the same rule_id fire in 60s across all hosts,
+      it suppresses further alerts and emits a single MASS_OUTAGE_DETECTED.
     """
 
     def __init__(self):
-        self._seen: dict[str, dict] = {}
+        self._seen: dict[str, dict] = {}           # Key: "rule_id:host"
+        self._global_counts: dict[str, list] = {}  # Key: "rule_id", Value: list of timestamps
 
     def process(self, alert: dict) -> dict | None:
-        key = f"{alert['rule_id']}:{alert['host']}:{alert.get('actor','')}"
         now = time.time()
+        rule_id = alert['rule_id']
+        host = alert['host']
+        key = f"{rule_id}:{host}"
 
+        # 1. Global Mass Outage Protection
+        timestamps = self._global_counts.setdefault(rule_id, [])
+        timestamps.append(now)
+        # Evict old timestamps
+        cutoff = now - DEDUP_WINDOW_SECONDS
+        self._global_counts[rule_id] = [t for t in timestamps if t > cutoff]
+        
+        if len(self._global_counts[rule_id]) > GLOBAL_ALERT_LIMIT:
+            # If this is exactly the (LIMIT + 1)th alert, fire the mass outage summary
+            if len(self._global_counts[rule_id]) == GLOBAL_ALERT_LIMIT + 1:
+                return {
+                    "rule_id": "MASS_OUTAGE_DETECTED",
+                    "severity": "CRITICAL",
+                    "priority": "P1",
+                    "description": f"Mass outage detected: >{GLOBAL_ALERT_LIMIT} instances of {rule_id} in {DEDUP_WINDOW_SECONDS}s",
+                    "suppressed_rule": rule_id,
+                    "host": "multiple"
+                }
+            # Suppress all subsequent alerts for this rule during the storm
+            return None
+
+        # 2. Host-Level Deduplication
         if key in self._seen:
             entry = self._seen[key]
             if now - entry['first_seen'] < DEDUP_WINDOW_SECONDS:
                 entry['count'] += 1
-                return None  # Suppress duplicate
+                return None  # Suppress duplicate for this specific host
 
         # New alert
         self._seen[key] = {'first_seen': now, 'count': 1}

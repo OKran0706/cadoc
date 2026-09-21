@@ -388,6 +388,11 @@ vault kv put secret/canary/alerts \
 vault kv put secret/canary/db \
   postgres_conn="postgres://canary_monitor:$(openssl rand -base64 24)@db-prod.internal/prod"
 
+# Maintenance key (the PRIVATE key for signing auth tickets)
+# This should only be accessible to the CI/CD pipeline or security team
+vault kv put secret/canary/maintenance \
+  ed25519_privkey="$(base64 -w0 /path/to/secure/maintenance.key)"
+
 # Sentinel fetches these at startup via Vault agent sidecar
 # or direct API call with a short-lived token
 ```
@@ -456,14 +461,27 @@ echo "DEPLOYMENT HAS ISSUES — investigate before proceeding" && exit 1
 kafka-consumer-groups.sh --bootstrap-server kafka-0:9092 \
   --group detection --describe
 
-# 3. Upgrade component (example: detection engine)
-ansible-playbook site.yml --tags detection --limit production \
-  -e "canary_version=1.2.0"
+# 3. Generate a signed REDEPLOY ticket (run on secure workstation)
+generate-ticket \
+  --key /path/to/maintenance.key \
+  --action REDEPLOY \
+  --target app-server-1 \
+  --binary sentinel-a \
+  --new-hash $(sha256sum dist/sentinel-a-linux-amd64 | awk '{print $1}') \
+  --issuer "ci-pipeline" \
+  --ttl 10m \
+  --output /tmp/redeploy-ticket.json
 
-# 4. Validate before upgrading next component
+# 4. Upgrade component (example: sentinel with signed ticket)
+TICKET_JSON=$(cat /tmp/redeploy-ticket.json)
+ansible-playbook site.yml --tags sentinel --limit production \
+  -e "canary_version=1.2.0" \
+  -e "auth_ticket_json=${TICKET_JSON}"
+
+# 5. Validate before upgrading next component
 /opt/canary/deploy/validate.sh
 
-# 5. Never upgrade sentinel and telemetry simultaneously
+# 6. Never upgrade sentinel and telemetry simultaneously
 # (risk of dropping events during the transition window)
 ```
 

@@ -75,7 +75,9 @@ These scenarios are detected with high confidence (Tier 1 rules):
 
 **Detection:** eBPF probe on `kill()` syscall targeting sentinel PIDs fires before the signal is delivered. The mutual watchdog fires an out-of-band alert if the process disappears. The kill attempt itself is recorded in the remote log.
 
-**Confidence:** High. Even if the attacker kills sentinel-a, sentinel-b fires the alert and vice versa. Go binary with no interpreter — harder to monkey-patch or hot-reload malicious code into than a Python process.
+**Additional defense:** Even `systemctl stop` or `SIGTERM` now triggers an `UNAUTHORIZED_SHUTDOWN` P1 alert unless the operator has presented a valid, Ed25519-signed Authorization Ticket first. An attacker with root access but without the offline maintenance signing key **cannot** gracefully shut down the sentinel without triggering a P1 alert.
+
+**Confidence:** Very high. Even if the attacker kills sentinel-a, sentinel-b fires the alert and vice versa. The cryptographic authorization ticket requirement means `root` alone is insufficient to silence the system.
 
 ---
 
@@ -250,6 +252,8 @@ truncate -s 0 /opt/sentinel/logs/local-chain.log
 
 ## Maintenance Windows
 
+All lifecycle operations (deployment, redeployment, shutdown, killswitch) require a cryptographically signed **Authorization Ticket**. See `sentinel-daemon/SKILL.md` > "Cryptographic Authorization Tickets" for the full procedure.
+
 Some legitimate operations will trigger Tier 2 (behavioral) alerts if not handled:
 
 | Operation | Affected Rule | Mitigation |
@@ -259,5 +263,9 @@ Some legitimate operations will trigger Tier 2 (behavioral) alerts if not handle
 | Security audit / pentest | Multiple | Pre-approve in suppression list with exact time window |
 | Canary file rotation | CANARY_FILE_METADATA_CHANGE | Canary-cleaner binary in stat_exclusions |
 | Velero backup | HIGH_VOLUME_PVC_READ | Velero SA in PVC allowlist |
+| **Sentinel redeployment** | SENTINEL_DOWN, VERIFIER_ANOMALY | **Generate a signed REDEPLOY ticket** |
+| **Sentinel shutdown** | UNAUTHORIZED_SHUTDOWN | **Generate a signed SHUTDOWN ticket** (temporary) |
+| **Sentinel decommission** | SENTINEL_SILENT, SENTINEL_DOWN | **Generate a signed DEREGISTER ticket** (permanent) |
+| **Kill switch activation** | SENTINEL_DEGRADED | **Generate a signed KILLSWITCH_ACTIVATE ticket** |
 
 **Tier 1 rules are never suppressed during maintenance windows.** If a real attacker times their attack to coincide with a maintenance window, Tier 1 detects them regardless.

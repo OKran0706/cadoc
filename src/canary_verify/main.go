@@ -20,6 +20,9 @@ import (
 	"time"
 )
 
+// MaintenanceFile is the path written by sentinel when a valid auth ticket is active.
+const MaintenanceFile = "/run/canary/maintenance.active"
+
 type Config struct {
 	WebhookURL      string
 	Hostname        string
@@ -54,11 +57,19 @@ func main() {
 func runChecks(cfg Config) {
 	anomalies := make([]string, 0)
 
-	// 1. Check if processes are running
-	expectedProcs := []string{"canary-sentinel-a", "canary-sentinel-b", "vector"}
-	for _, proc := range expectedProcs {
-		if !isProcessRunning(proc) {
-			anomalies = append(anomalies, fmt.Sprintf("%s is not running", proc))
+	// Check if maintenance is active (a valid signed ticket was presented)
+	maintActive, maintInfo := isMaintenanceActive()
+	if maintActive {
+		log.Printf("Maintenance mode active: %s (suppressing process checks)", maintInfo)
+	}
+
+	// 1. Check if processes are running (skip during authorized maintenance)
+	if !maintActive {
+		expectedProcs := []string{"canary-sentinel-a", "canary-sentinel-b", "vector"}
+		for _, proc := range expectedProcs {
+			if !isProcessRunning(proc) {
+				anomalies = append(anomalies, fmt.Sprintf("%s is not running", proc))
+			}
 		}
 	}
 
@@ -110,6 +121,43 @@ func isProcessRunning(name string) bool {
 	cmd := exec.Command("pgrep", "-f", name)
 	err := cmd.Run()
 	return err == nil
+}
+
+// isMaintenanceActive checks if a valid maintenance window is active.
+// Returns (active bool, info string).
+func isMaintenanceActive() (bool, string) {
+	data, err := os.ReadFile(MaintenanceFile)
+	if err != nil {
+		return false, ""
+	}
+
+	var maint map[string]string
+	if err := json.Unmarshal(data, &maint); err != nil {
+		// File exists but is malformed — don't trust it
+		log.Printf("Warning: malformed maintenance file: %v", err)
+		return false, ""
+	}
+
+	// Check expiration
+	expStr, ok := maint["exp"]
+	if !ok {
+		return false, ""
+	}
+
+	expTime, err := time.Parse(time.RFC3339, expStr)
+	if err != nil {
+		log.Printf("Warning: invalid maintenance expiration: %v", err)
+		return false, ""
+	}
+
+	if time.Now().UTC().After(expTime) {
+		// Maintenance window expired — clean up and alert normally
+		os.Remove(MaintenanceFile)
+		return false, ""
+	}
+
+	info := fmt.Sprintf("action=%s issuer=%s exp=%s", maint["action"], maint["issuer"], expStr)
+	return true, info
 }
 
 func isTetragonPolicyLoaded(policyName string) bool {
