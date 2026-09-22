@@ -163,19 +163,26 @@ ansible/
 
 To avoid storing persistent Vault tokens on disk, use the **Response Wrapping** flow during deployment:
 
-### 1. Generate Wrapped Token (on Deployment Server)
-The Ansible/CI controller fetches a wrapped AppRole token from Vault:
+### 1. Generate Wrapped Tokens (on Deployment Server)
+The Ansible/CI controller fetches **two separate** wrapped tokens from Vault, one for each sentinel process:
 ```bash
-# Request a token wrapped for 60 seconds
-WRAPPED_TOKEN=$(vault write -wrap-ttl=60s -field=wrapping_token auth/approle/login role_id=$ROLE_ID)
+# Request a token for Sentinel-A
+WRAPPED_TOKEN_A=$(vault write -wrap-ttl=60s -field=wrapping_token auth/approle/login role_id=$ROLE_ID_A)
+
+# Request a token for Sentinel-B
+WRAPPED_TOKEN_B=$(vault write -wrap-ttl=60s -field=wrapping_token auth/approle/login role_id=$ROLE_ID_B)
 ```
 
-### 2. Inject into Sentinel (as Environment Variable)
-Ansible starts the Sentinel service, passing the wrapped token via `Environment=` or a temporary systemd override:
+### 2. Inject into Sentinels (as Environment Variables)
+Ansible starts the services, passing each unique token to its respective process:
 ```ini
 # /etc/systemd/system/canary-sentinel-a.service.d/override.conf
 [Service]
-Environment="VAULT_WRAPPED_TOKEN={{ WRAPPED_TOKEN }}"
+Environment="VAULT_WRAPPED_TOKEN_A={{ WRAPPED_TOKEN_A }}"
+
+# /etc/systemd/system/canary-sentinel-b.service.d/override.conf
+[Service]
+Environment="VAULT_WRAPPED_TOKEN_B={{ WRAPPED_TOKEN_B }}"
 ```
 
 ### 3. Automatic Unwrapping

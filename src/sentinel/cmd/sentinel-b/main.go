@@ -241,21 +241,27 @@ func dropCapabilitiesAfterInit() error {
 // unwrapVaultToken checks for a wrapped token in the environment,
 // unwraps it to get a real session token, and exports it for the process.
 func unwrapVaultToken(vc *vault.Client) error {
-	wrapped := os.Getenv("VAULT_WRAPPED_TOKEN")
+	// Support both specific (TOKEN_B) and generic (WRAPPED_TOKEN) env vars
+	wrapped := os.Getenv("VAULT_WRAPPED_TOKEN_B")
+	if wrapped == "" {
+		wrapped = os.Getenv("VAULT_WRAPPED_TOKEN")
+	}
+	
 	if wrapped == "" {
 		return nil // No wrapped token provided
 	}
 
-	log.Println("Vault wrapped token detected — attempting to unwrap via API...")
+	log.Println("Vault wrapped token detected for Sentinel-B — attempting to unwrap via API...")
 
 	_, err := vc.Unwrap(wrapped)
 	if err != nil {
 		return fmt.Errorf("vault unwrap failed: %w", err)
 	}
 
-	// CRITICAL: Unset the wrapped token so it cannot be leaked/reused
+	// CRITICAL: Unset the wrapped tokens so they cannot be leaked/reused
+	os.Unsetenv("VAULT_WRAPPED_TOKEN_B")
 	os.Unsetenv("VAULT_WRAPPED_TOKEN")
 	
-	log.Println("Vault token successfully unwrapped into memory")
+	log.Println("Vault token successfully unwrapped for Sentinel-B into memory")
 	return nil
 }
