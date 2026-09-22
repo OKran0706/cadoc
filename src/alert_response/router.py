@@ -9,7 +9,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from alert_response import webhook, slack
+from . import webhook, slack
 
 logger = logging.getLogger("alert.router")
 
@@ -41,7 +41,7 @@ class AlertRouter:
         """Lazy-load automated response handlers."""
         handlers = {}
         try:
-            from alert_response.response import isolate_pod, revoke_db_session, freeze_snapshot, quarantine_host
+            from .response import isolate_pod, revoke_db_session, freeze_snapshot, quarantine_host
             handlers["isolate_pod"] = isolate_pod.isolate_pod
             handlers["quarantine_candidate"] = isolate_pod.isolate_pod  # Same handler
             handlers["revoke_db_session"] = revoke_db_session.revoke_db_session
@@ -90,7 +90,7 @@ class AlertRouter:
 
         # Automated response
         auto_response = routing.get("auto_response")
-        if auto_response and auto_response in self.response_handlers:
+        if auto_response and isinstance(auto_response, str) and auto_response in self.response_handlers:
             self._execute_response(auto_response, alert)
 
     def _emit_siem(self, alert: dict):

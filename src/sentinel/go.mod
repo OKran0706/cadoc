@@ -8,4 +8,5 @@ require (
 	gopkg.in/yaml.v3              v3.0.1
 	kernel.org/pub/linux/libs/security/libcap/cap v1.2.69
 	github.com/cilium/tetragon/api/v1/tetragon v0.11.0
+	github.com/hashicorp/vault/api            v1.12.2
 )

@@ -36,6 +36,7 @@ type SigningConfig struct {
 	TPMHandle string `yaml:"tpm_handle"`
 	KeyFile   string `yaml:"key_file"`
 	VaultPath string `yaml:"vault_path"`
+	VaultField string `yaml:"vault_field"` // Field name in the Vault secret (default: ed25519_privkey)
 }
 
 // TelemetryConfig configures the Kafka connection.
@@ -104,6 +105,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Maintenance.VaultField == "" {
 		cfg.Maintenance.VaultField = "ed25519_pubkey"
+	}
+	if cfg.Signing.VaultField == "" {
+		cfg.Signing.VaultField = "ed25519_privkey"
 	}
 
 	return &cfg, nil

@@ -158,6 +158,28 @@ ansible/
     - /opt/canary/bin
     - /opt/canary/config
     - /opt/canary/logs
+
+## Secure Boot: Vault Response Wrapping (Approach 3)
+
+To avoid storing persistent Vault tokens on disk, use the **Response Wrapping** flow during deployment:
+
+### 1. Generate Wrapped Token (on Deployment Server)
+The Ansible/CI controller fetches a wrapped AppRole token from Vault:
+```bash
+# Request a token wrapped for 60 seconds
+WRAPPED_TOKEN=$(vault write -wrap-ttl=60s -field=wrapping_token auth/approle/login role_id=$ROLE_ID)
+```
+
+### 2. Inject into Sentinel (as Environment Variable)
+Ansible starts the Sentinel service, passing the wrapped token via `Environment=` or a temporary systemd override:
+```ini
+# /etc/systemd/system/canary-sentinel-a.service.d/override.conf
+[Service]
+Environment="VAULT_WRAPPED_TOKEN={{ WRAPPED_TOKEN }}"
+```
+
+### 3. Automatic Unwrapping
+The Sentinel binary detects the environment variable, uses its internal Vault API client to exchange it, and stores the real token **only in its process memory**. It then unsets the environment variable so it cannot be inspected. No external `vault` binary is required on the host.
     - /opt/canary/keys
     - /run/canary
     - /opt/sentinel/bin
@@ -600,7 +622,10 @@ grype sbom:sentinel-sbom.spdx.json --fail-on critical
 |---|---|
 | **Critical** | Blocks the release — must be fixed before merging |
 | **High** | Must be remediated within **7 days** |
-| **Medium** | Tracked in issue tracker, remediated on next release cycle |
+| Tetragon / Falco | eBPF runtime monitoring (must be running) |
+| Kafka / Redpanda | Central telemetry bus |
+| HashiCorp Vault | Central secret storage (Sentinel uses internal API client) |
+| jq / kafkacat | Debugging only (optional) |
 | **Low** | Advisory only |
 
 ---

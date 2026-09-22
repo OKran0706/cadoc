@@ -94,6 +94,7 @@ signing:
   key_file: /opt/sentinel/keys/ed25519.priv
   # Vault path (if key_source = vault):
   vault_path: "secret/canary/signing-key"
+  vault_field: "ed25519_privkey"  # Field name in the Vault secret (hex encoded)
 
 telemetry:
   kafka_brokers: ["kafka-0:9092", "kafka-1:9092"]
@@ -165,6 +166,31 @@ chown root:root /opt/sentinel/keys/ed25519.priv
 
 # Distribute public key to remote log verifier
 scp /opt/sentinel/keys/ed25519.pub log-verifier.internal:/etc/canary/trusted-keys/$(hostname).pub
+
+### Vault-Based Key Management (Recommended for Zero-Disk Deployment)
+
+To avoid storing any keys on the local filesystem, you can store the hex-encoded private key in Vault:
+
+```bash
+# 1. Generate key pair locally
+openssl genpkey -algorithm ed25519 -out priv.pem
+openssl pkey -in priv.pem -pubout -out pub.pem
+
+# 2. Extract hex encoded private key (raw 32 bytes)
+# Note: Ed25519 private keys in OpenSSL PEM format are wrapped; 
+# you need to extract the raw seed/private bytes.
+PRV_HEX=$(openssl pkey -in priv.pem -text -noout | grep "priv:" -A 3 | grep -v "priv:" | tr -d ' \n:')
+
+# 3. Store in Vault
+vault kv put secret/canary/signing-key ed25519_privkey="$PRV_HEX"
+
+# 4. Configure sentinel.yaml
+# signing:
+#   key_source: vault
+#   vault_path: secret/canary/signing-key
+```
+
+When `key_source: vault` is used, the Sentinel binary uses its internal API client at startup to fetch the key and holds it ONLY in memory. No external `vault` CLI dependency is required on the server.
 ```
 
 ---

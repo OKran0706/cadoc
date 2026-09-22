@@ -12,11 +12,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/your-org/canary/sentinel/internal/config"
 	"github.com/your-org/canary/sentinel/internal/heartbeat"
 	"github.com/your-org/canary/sentinel/internal/signer"
+	"github.com/your-org/canary/sentinel/internal/vault"
 
 	"github.com/segmentio/kafka-go"
 	"kernel.org/pub/linux/libs/security/libcap/cap"
@@ -34,6 +36,17 @@ func main() {
 	peerPIDFile := flag.String("peer-pid-file", "/run/canary/sentinel-a.pid", "Path to sentinel-a PID file")
 	flag.Parse()
 	_ = peerPIDFile // used for mutual monitoring
+
+	// 0. Initialize Vault Client
+	vaultClient, err := vault.New()
+	if err != nil {
+		log.Fatalf("Failed to initialize Vault client: %v", err)
+	}
+
+	// 0. Unwrap Vault Token (Approach 3 - One-Time Response Wrapping)
+	if err := unwrapVaultToken(vaultClient); err != nil {
+		log.Printf("Vault unwrapping: %v (skipping if VAULT_TOKEN already set or not needed)", err)
+	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -222,5 +235,27 @@ func dropCapabilitiesAfterInit() error {
 	if verify.GetFlag(cap.Effective, cap.SYS_ADMIN) {
 		return fmt.Errorf("CAP_SYS_ADMIN still effective after drop — aborting")
 	}
+	return nil
+}
+
+// unwrapVaultToken checks for a wrapped token in the environment,
+// unwraps it to get a real session token, and exports it for the process.
+func unwrapVaultToken(vc *vault.Client) error {
+	wrapped := os.Getenv("VAULT_WRAPPED_TOKEN")
+	if wrapped == "" {
+		return nil // No wrapped token provided
+	}
+
+	log.Println("Vault wrapped token detected — attempting to unwrap via API...")
+
+	_, err := vc.Unwrap(wrapped)
+	if err != nil {
+		return fmt.Errorf("vault unwrap failed: %w", err)
+	}
+
+	// CRITICAL: Unset the wrapped token so it cannot be leaked/reused
+	os.Unsetenv("VAULT_WRAPPED_TOKEN")
+	
+	log.Println("Vault token successfully unwrapped into memory")
 	return nil
 }

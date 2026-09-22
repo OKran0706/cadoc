@@ -11,11 +11,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/your-org/canary/sentinel/internal/config"
+	"github.com/your-org/canary/sentinel/internal/vault"
 )
 
 // Signer handles Ed25519 signing and Merkle chaining of events.
@@ -53,8 +55,30 @@ func New(cfg config.SigningConfig) (*Signer, error) {
 		return nil, fmt.Errorf("TPM signing not yet implemented — use key_source: file")
 
 	case "vault":
-		// Vault transit engine placeholder — fetch key via Vault API
-		return nil, fmt.Errorf("Vault signing not yet implemented — use key_source: file")
+		// Fetch private key from Vault (held in memory only) via API library
+		vc, err := vault.New()
+		if err != nil {
+			return nil, fmt.Errorf("init vault client: %w", err)
+		}
+
+		keyStr, err := vc.GetSecretField(cfg.VaultPath, cfg.VaultField)
+		if err != nil {
+			return nil, fmt.Errorf("vault signing key: %w", err)
+		}
+		
+		keyBytes, err := hex.DecodeString(strings.TrimSpace(keyStr))
+		if err != nil {
+			return nil, fmt.Errorf("decode vault key (hex expected): %w", err)
+		}
+		
+		if len(keyBytes) != ed25519.PrivateKeySize {
+			return nil, fmt.Errorf("invalid ed25519 private key size: got %d, want %d", len(keyBytes), ed25519.PrivateKeySize)
+		}
+		
+		privKey = ed25519.PrivateKey(keyBytes)
+		pub := privKey.Public().(ed25519.PublicKey)
+		hash := sha256.Sum256(pub)
+		pubKeyFP = hex.EncodeToString(hash[:8])
 
 	default:
 		return nil, fmt.Errorf("unknown key_source: %s", cfg.KeySource)
