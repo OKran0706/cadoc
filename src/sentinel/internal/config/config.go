@@ -32,9 +32,7 @@ type MaintenanceConfig struct {
 // SigningConfig configures the Ed25519 signing key source.
 type SigningConfig struct {
 	Algorithm string `yaml:"algorithm"`
-	KeySource string `yaml:"key_source"` // "tpm" | "file" | "vault"
-	TPMHandle string `yaml:"tpm_handle"`
-	KeyFile   string `yaml:"key_file"`
+	KeySource string `yaml:"key_source"` // "vault" (enforced zero-disk)
 	VaultPath string `yaml:"vault_path"`
 	VaultField string `yaml:"vault_field"` // Field name in the Vault secret (default: ed25519_privkey)
 }

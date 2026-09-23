@@ -153,20 +153,6 @@ chmod 400 /opt/sentinel/keys/.tpm_handle
 echo '{"test":"event"}' | tpm2_sign -c 0x81000001 -g sha256 -o /tmp/test.sig -
 ```
 
-### File-Based Fallback (No TPM)
-
-```bash
-# Generate Ed25519 key pair
-openssl genpkey -algorithm ed25519 -out /opt/sentinel/keys/ed25519.priv
-openssl pkey -in /opt/sentinel/keys/ed25519.priv -pubout -out /opt/sentinel/keys/ed25519.pub
-
-# Strict permissions — only root can read the private key
-chmod 400 /opt/sentinel/keys/ed25519.priv
-chown root:root /opt/sentinel/keys/ed25519.priv
-
-# Distribute public key to remote log verifier
-scp /opt/sentinel/keys/ed25519.pub log-verifier.internal:/etc/canary/trusted-keys/$(hostname).pub
-
 ### Vault-Based Key Management (Recommended for Zero-Disk Deployment)
 
 To avoid storing any keys on the local filesystem, you can store the hex-encoded private key in Vault:

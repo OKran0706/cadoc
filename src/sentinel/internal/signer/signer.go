@@ -36,24 +36,7 @@ func New(cfg config.SigningConfig) (*Signer, error) {
 	hostname, _ := os.Hostname()
 
 	var privKey ed25519.PrivateKey
-	var pubKeyFP string
-
-	switch cfg.KeySource {
-	case "file":
-		keyBytes, err := os.ReadFile(cfg.KeyFile)
-		if err != nil {
-			return nil, fmt.Errorf("read signing key: %w", err)
-		}
-		privKey = ed25519.PrivateKey(keyBytes)
-		pub := privKey.Public().(ed25519.PublicKey)
-		hash := sha256.Sum256(pub)
-		pubKeyFP = hex.EncodeToString(hash[:8])
-
-	case "tpm":
-		// TPM signing placeholder — in production, use go-tpm2 library
-		// to load the persistent handle and sign via TPM2_Sign
-		return nil, fmt.Errorf("TPM signing not yet implemented — use key_source: file")
-
+	switch strings.ToLower(cfg.KeySource) {
 	case "vault":
 		// Fetch private key from Vault (held in memory only) via API library
 		vc, err := vault.New()
@@ -81,7 +64,7 @@ func New(cfg config.SigningConfig) (*Signer, error) {
 		pubKeyFP = hex.EncodeToString(hash[:8])
 
 	default:
-		return nil, fmt.Errorf("unknown key_source: %s", cfg.KeySource)
+		return nil, fmt.Errorf("unsupported key_source: %s (only 'vault' is supported)", cfg.KeySource)
 	}
 
 	return &Signer{

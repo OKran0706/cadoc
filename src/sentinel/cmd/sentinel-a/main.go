@@ -17,8 +17,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"strings"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -29,10 +29,10 @@ import (
 	"github.com/your-org/canary/sentinel/internal/heartbeat"
 	"github.com/your-org/canary/sentinel/internal/selfmon"
 	"github.com/your-org/canary/sentinel/internal/signer"
+	"github.com/your-org/canary/sentinel/internal/sysutil"
 	"github.com/your-org/canary/sentinel/internal/vault"
 
 	"github.com/segmentio/kafka-go"
-	"kernel.org/pub/linux/libs/security/libcap/cap"
 )
 
 // authorizedShutdown is set to 1 when a valid maintenance ticket has been processed.
@@ -54,7 +54,7 @@ func main() {
 
 	// 0. Unwrap Vault Token (Approach 3 - One-Time Response Wrapping)
 	// This ensures we have a valid VAULT_TOKEN in memory without storing it on disk.
-	if err := unwrapVaultToken(vaultClient); err != nil {
+	if err := sysutil.UnwrapVaultToken(vaultClient, "VAULT_WRAPPED_TOKEN_A", "Sentinel-A"); err != nil {
 		log.Printf("Vault unwrapping: %v (skipping if VAULT_TOKEN already set or not needed)", err)
 	}
 
@@ -64,7 +64,13 @@ func main() {
 	}
 
 	// 1. Runtime Binary Verification
-	if err := verifySelfIntegrity(cfg.OOBAlert.URL); err != nil {
+	if expected, actual, err := sysutil.VerifySelfIntegrity("sentinel-a"); err != nil {
+		sendOOBAlert(cfg.OOBAlert.URL, map[string]interface{}{
+			"type":   "BINARY_TAMPERED",
+			"binary": "sentinel-a",
+			"error":  fmt.Sprintf("expected %s got %s", expected, actual),
+			"host":   os.Getenv("HOSTNAME"),
+		})
 		log.Fatalf("Integrity verification failed: %v", err)
 	}
 
@@ -190,7 +196,7 @@ func main() {
 	time.Sleep(1 * time.Second)
 
 	// 3. Drop capabilities
-	if err := dropCapabilitiesAfterInit(); err != nil {
+	if err := sysutil.DropCapabilitiesAfterInit(); err != nil {
 		log.Fatalf("Failed to drop capabilities: %v", err)
 	}
 
@@ -300,93 +306,16 @@ func verifyKafka(brokers []string) error {
 	return fmt.Errorf("no Kafka broker reachable from %v", brokers)
 }
 
-func verifySelfIntegrity(oobUrl string) error {
-	exe, err := os.Executable()
-	if err != nil {
-		return err
+func verifyKafka(brokers []string) error {
+	for _, broker := range brokers {
+		conn, err := net.DialTimeout("tcp", broker, 5*time.Second)
+		if err != nil {
+			continue
+		}
+		conn.Close()
+		return nil
 	}
-
-	f, err := os.Open(exe)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return err
-	}
-	actual := hex.EncodeToString(h.Sum(nil))
-
-	// In a real implementation this fetches from vault: vault.GetSecret("canary/binary-hashes/sentinel-a")
-	// For simulation, we assume expected == actual unless tampered.
-	expected := actual 
-
-	if actual != expected {
-		sendOOBAlert(oobUrl, map[string]interface{}{
-			"type":   "BINARY_TAMPERED",
-			"binary": "sentinel-a",
-			"error":  fmt.Sprintf("expected %s got %s", expected, actual),
-			"host":   os.Getenv("HOSTNAME"),
-		})
-		return fmt.Errorf("BINARY_INTEGRITY_FAIL: expected %s got %s", expected, actual)
-	}
-	return nil
-}
-
-// unwrapVaultToken checks for a wrapped token in the environment,
-// unwraps it to get a real session token, and exports it for the process.
-func unwrapVaultToken(vc *vault.Client) error {
-	// Support both specific (TOKEN_A) and generic (WRAPPED_TOKEN) env vars
-	wrapped := os.Getenv("VAULT_WRAPPED_TOKEN_A")
-	if wrapped == "" {
-		wrapped = os.Getenv("VAULT_WRAPPED_TOKEN")
-	}
-	
-	if wrapped == "" {
-		return nil // No wrapped token provided
-	}
-
-	log.Println("Vault wrapped token detected for Sentinel-A — attempting to unwrap via API...")
-
-	_, err := vc.Unwrap(wrapped)
-	if err != nil {
-		return fmt.Errorf("vault unwrap failed: %w", err)
-	}
-
-	// CRITICAL: Unset the wrapped tokens so they cannot be leaked/reused
-	os.Unsetenv("VAULT_WRAPPED_TOKEN_A")
-	os.Unsetenv("VAULT_WRAPPED_TOKEN")
-	
-	log.Println("Vault token successfully unwrapped for Sentinel-A into memory")
-	return nil
-}
-
-func dropCapabilitiesAfterInit() error {
-	c := cap.NewSet()
-	c.SetFlag(cap.Permitted, true, cap.NET_ADMIN)
-	c.SetFlag(cap.Effective, true, cap.NET_ADMIN)
-	// Explicitly clear SYS_ADMIN, BPF, PERFMON
-	c.SetFlag(cap.Permitted, false, cap.SYS_ADMIN)
-	c.SetFlag(cap.Effective, false, cap.SYS_ADMIN)
-	c.SetFlag(cap.Permitted, false, cap.BPF)
-	c.SetFlag(cap.Effective, false, cap.BPF)
-	c.SetFlag(cap.Permitted, false, cap.PERFMON)
-	c.SetFlag(cap.Effective, false, cap.PERFMON)
-
-	if err := c.SetProc(); err != nil {
-		return fmt.Errorf("capability drop failed: %w", err)
-	}
-
-	// Verify drop succeeded
-	verify, err := cap.GetPID(0)
-	if err != nil {
-		return err
-	}
-	if verify.GetFlag(cap.Effective, cap.SYS_ADMIN) {
-		return fmt.Errorf("CAP_SYS_ADMIN still effective after drop — aborting")
-	}
-	return nil
+	return fmt.Errorf("no Kafka broker reachable from %v", brokers)
 }
 
 func pollKillSwitch(ctx context.Context, oobUrl string, s *signer.Signer, writer *kafka.Writer, verifier *auth.Verifier, vc *vault.Client) {

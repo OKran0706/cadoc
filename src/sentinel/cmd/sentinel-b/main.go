@@ -15,7 +15,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"sync"
@@ -25,10 +24,10 @@ import (
 	"github.com/your-org/canary/sentinel/internal/config"
 	"github.com/your-org/canary/sentinel/internal/heartbeat"
 	"github.com/your-org/canary/sentinel/internal/signer"
+	"github.com/your-org/canary/sentinel/internal/sysutil"
 	"github.com/your-org/canary/sentinel/internal/vault"
 
 	"github.com/segmentio/kafka-go"
-	"kernel.org/pub/linux/libs/security/libcap/cap"
 )
 
 func main() {
@@ -44,7 +43,7 @@ func main() {
 	}
 
 	// 0. Unwrap Vault Token (Approach 3 - One-Time Response Wrapping)
-	if err := unwrapVaultToken(vaultClient); err != nil {
+	if err := sysutil.UnwrapVaultToken(vaultClient, "VAULT_WRAPPED_TOKEN_B", "Sentinel-B"); err != nil {
 		log.Printf("Vault unwrapping: %v (skipping if VAULT_TOKEN already set or not needed)", err)
 	}
 
@@ -54,7 +53,19 @@ func main() {
 	}
 
 	// 1. Runtime Binary Verification
-	if err := verifySelfIntegrity(cfg.OOBAlert.URL); err != nil {
+	if expected, actual, err := sysutil.VerifySelfIntegrity("sentinel-b"); err != nil {
+		payload := map[string]interface{}{
+			"type":   "BINARY_TAMPERED",
+			"binary": "sentinel-b",
+			"error":  fmt.Sprintf("expected %s got %s", expected, actual),
+			"host":   os.Getenv("HOSTNAME"),
+			"ts":     time.Now().UTC().Format(time.RFC3339Nano),
+		}
+		body, _ := json.Marshal(payload)
+		client := &http.Client{Timeout: 10 * time.Second}
+		if resp, reqErr := client.Post(cfg.OOBAlert.URL, "application/json", bytes.NewReader(body)); reqErr == nil {
+			resp.Body.Close()
+		}
 		log.Fatalf("Integrity verification failed: %v", err)
 	}
 
@@ -79,7 +90,7 @@ func main() {
 	defer writer.Close()
 
 	// 2. Drop capabilities
-	if err := dropCapabilitiesAfterInit(); err != nil {
+	if err := sysutil.DropCapabilitiesAfterInit(); err != nil {
 		log.Fatalf("Failed to drop capabilities: %v", err)
 	}
 
@@ -153,7 +164,6 @@ func main() {
 	wg.Wait()
 }
 
-// sendOOBAlert sends an out-of-band alert directly to PagerDuty, bypassing Kafka.
 func sendOOBAlert(url, peerName string, downDuration time.Duration) {
 	payload := map[string]interface{}{
 		"type":          "SENTINEL_DOWN",
@@ -171,97 +181,4 @@ func sendOOBAlert(url, peerName string, downDuration time.Duration) {
 	}
 	resp.Body.Close()
 	log.Printf("OOB alert sent for %s (status %d)", peerName, resp.StatusCode)
-}
-
-func verifySelfIntegrity(oobUrl string) error {
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-
-	f, err := os.Open(exe)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return err
-	}
-	actual := hex.EncodeToString(h.Sum(nil))
-
-	expected := actual // TODO: fetch from Vault
-
-	if actual != expected {
-		// sendOOBAlert expects specific signature above, using inline post here
-		payload := map[string]interface{}{
-			"type":   "BINARY_TAMPERED",
-			"binary": "sentinel-b",
-			"error":  fmt.Sprintf("expected %s got %s", expected, actual),
-			"host":   os.Getenv("HOSTNAME"),
-			"ts":     time.Now().UTC().Format(time.RFC3339Nano),
-		}
-		body, _ := json.Marshal(payload)
-		client := &http.Client{Timeout: 10 * time.Second}
-		resp, err := client.Post(oobUrl, "application/json", bytes.NewReader(body))
-		if err == nil {
-			resp.Body.Close()
-		}
-		return fmt.Errorf("BINARY_INTEGRITY_FAIL: expected %s got %s", expected, actual)
-	}
-	return nil
-}
-
-func dropCapabilitiesAfterInit() error {
-	c := cap.NewSet()
-	c.SetFlag(cap.Permitted, true, cap.NET_ADMIN)
-	c.SetFlag(cap.Effective, true, cap.NET_ADMIN)
-	c.SetFlag(cap.Permitted, false, cap.SYS_ADMIN)
-	c.SetFlag(cap.Effective, false, cap.SYS_ADMIN)
-	c.SetFlag(cap.Permitted, false, cap.BPF)
-	c.SetFlag(cap.Effective, false, cap.BPF)
-	c.SetFlag(cap.Permitted, false, cap.PERFMON)
-	c.SetFlag(cap.Effective, false, cap.PERFMON)
-
-	if err := c.SetProc(); err != nil {
-		return fmt.Errorf("capability drop failed: %w", err)
-	}
-
-	verify, err := cap.GetPID(0)
-	if err != nil {
-		return err
-	}
-	if verify.GetFlag(cap.Effective, cap.SYS_ADMIN) {
-		return fmt.Errorf("CAP_SYS_ADMIN still effective after drop — aborting")
-	}
-	return nil
-}
-
-// unwrapVaultToken checks for a wrapped token in the environment,
-// unwraps it to get a real session token, and exports it for the process.
-func unwrapVaultToken(vc *vault.Client) error {
-	// Support both specific (TOKEN_B) and generic (WRAPPED_TOKEN) env vars
-	wrapped := os.Getenv("VAULT_WRAPPED_TOKEN_B")
-	if wrapped == "" {
-		wrapped = os.Getenv("VAULT_WRAPPED_TOKEN")
-	}
-	
-	if wrapped == "" {
-		return nil // No wrapped token provided
-	}
-
-	log.Println("Vault wrapped token detected for Sentinel-B — attempting to unwrap via API...")
-
-	_, err := vc.Unwrap(wrapped)
-	if err != nil {
-		return fmt.Errorf("vault unwrap failed: %w", err)
-	}
-
-	// CRITICAL: Unset the wrapped tokens so they cannot be leaked/reused
-	os.Unsetenv("VAULT_WRAPPED_TOKEN_B")
-	os.Unsetenv("VAULT_WRAPPED_TOKEN")
-	
-	log.Println("Vault token successfully unwrapped for Sentinel-B into memory")
-	return nil
 }
