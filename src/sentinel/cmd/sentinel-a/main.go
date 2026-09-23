@@ -306,18 +306,6 @@ func verifyKafka(brokers []string) error {
 	return fmt.Errorf("no Kafka broker reachable from %v", brokers)
 }
 
-func verifyKafka(brokers []string) error {
-	for _, broker := range brokers {
-		conn, err := net.DialTimeout("tcp", broker, 5*time.Second)
-		if err != nil {
-			continue
-		}
-		conn.Close()
-		return nil
-	}
-	return fmt.Errorf("no Kafka broker reachable from %v", brokers)
-}
-
 func pollKillSwitch(ctx context.Context, oobUrl string, s *signer.Signer, writer *kafka.Writer, verifier *auth.Verifier, vc *vault.Client) {
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
