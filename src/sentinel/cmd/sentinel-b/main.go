@@ -52,6 +52,15 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
+	tlsConfig, err := sysutil.LoadTLSConfig(cfg.Telemetry, vaultClient)
+	if err != nil {
+		log.Fatalf("Failed to load TLS config: %v", err)
+	}
+
+	kafkaTransport := &kafka.Transport{
+		TLS: tlsConfig,
+	}
+
 	// 1. Runtime Binary Verification
 	if expected, actual, err := sysutil.VerifySelfIntegrity("sentinel-b"); err != nil {
 		payload := map[string]interface{}{
@@ -83,9 +92,10 @@ func main() {
 	os.WriteFile("/run/canary/sentinel-b.pid", []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
 
 	writer := &kafka.Writer{
-		Addr:     kafka.TCP(cfg.Telemetry.KafkaBrokers...),
-		Topic:    cfg.Telemetry.Topic,
-		Balancer: &kafka.LeastBytes{},
+		Addr:      kafka.TCP(cfg.Telemetry.KafkaBrokers...),
+		Topic:     cfg.Telemetry.Topic,
+		Balancer:  &kafka.LeastBytes{},
+		Transport: kafkaTransport,
 	}
 	defer writer.Close()
 

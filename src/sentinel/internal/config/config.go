@@ -45,6 +45,9 @@ type TelemetryConfig struct {
 	ClientCert   string   `yaml:"client_cert"`
 	ClientKey    string   `yaml:"client_key"`
 	CACert       string   `yaml:"ca_cert"`
+	VaultClientCert string `yaml:"vault_client_cert"`
+	VaultClientKey string  `yaml:"vault_client_key"`
+	VaultCACert  string   `yaml:"vault_ca_cert"`
 }
 
 // OOBAlertConfig configures the out-of-band alert webhook.

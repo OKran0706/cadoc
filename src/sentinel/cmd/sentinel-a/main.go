@@ -63,6 +63,15 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
+	tlsConfig, err := sysutil.LoadTLSConfig(cfg.Telemetry, vaultClient)
+	if err != nil {
+		log.Fatalf("Failed to load TLS config: %v", err)
+	}
+
+	kafkaTransport := &kafka.Transport{
+		TLS: tlsConfig,
+	}
+
 	// 1. Runtime Binary Verification
 	if expected, actual, err := sysutil.VerifySelfIntegrity("sentinel-a"); err != nil {
 		sendOOBAlert(cfg.OOBAlert.URL, map[string]interface{}{
@@ -144,9 +153,10 @@ func main() {
 
 		// Must emit before anything else
 		tmpWriter := &kafka.Writer{
-			Addr:     kafka.TCP(cfg.Telemetry.KafkaBrokers...),
-			Topic:    cfg.Telemetry.Topic,
-			Balancer: &kafka.LeastBytes{},
+			Addr:      kafka.TCP(cfg.Telemetry.KafkaBrokers...),
+			Topic:     cfg.Telemetry.Topic,
+			Balancer:  &kafka.LeastBytes{},
+			Transport: kafkaTransport,
 		}
 		tmpWriter.WriteMessages(context.Background(), kafka.Message{Value: authPayload})
 		tmpWriter.Close()
@@ -175,9 +185,10 @@ func main() {
 
 	// Start Kafka writer
 	writer := &kafka.Writer{
-		Addr:     kafka.TCP(cfg.Telemetry.KafkaBrokers...),
-		Topic:    cfg.Telemetry.Topic,
-		Balancer: &kafka.LeastBytes{},
+		Addr:      kafka.TCP(cfg.Telemetry.KafkaBrokers...),
+		Topic:     cfg.Telemetry.Topic,
+		Balancer:  &kafka.LeastBytes{},
+		Transport: kafkaTransport,
 	}
 	defer writer.Close()
 

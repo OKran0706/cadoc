@@ -5,12 +5,16 @@ package sysutil
 
 import (
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"strings"
 
+	"github.com/your-org/canary/sentinel/internal/config"
 	"github.com/your-org/canary/sentinel/internal/vault"
 	"kernel.org/pub/linux/libs/security/libcap/cap"
 )
@@ -100,3 +104,74 @@ func VerifySelfIntegrity(binaryName string) (expected string, actual string, err
 	}
 	return expectedHash, actualHash, nil
 }
+
+// LoadTLSConfig creates a tls.Config fetching certs from Vault if configured.
+func LoadTLSConfig(cfg config.TelemetryConfig, vc *vault.Client) (*tls.Config, error) {
+	if !cfg.TLS {
+		return nil, nil
+	}
+
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	}
+
+	// Helper to fetch from Vault or fallback to file
+	getCertData := func(vaultLoc, filePath string) ([]byte, error) {
+		if vaultLoc != "" && vc != nil {
+			path, field := parseVaultLocation(vaultLoc)
+			secretStr, err := vc.GetSecretField(path, field)
+			if err != nil {
+				return nil, fmt.Errorf("vault fetch %s:%s failed: %w", path, field, err)
+			}
+			return []byte(strings.TrimSpace(secretStr)), nil
+		}
+		if filePath != "" {
+			return os.ReadFile(filePath)
+		}
+		return nil, nil
+	}
+
+	// Load CA Cert
+	caCertData, err := getCertData(cfg.VaultCACert, cfg.CACert)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load CA cert: %w", err)
+	}
+	if len(caCertData) > 0 {
+		caCertPool := x509.NewCertPool()
+		if !caCertPool.AppendCertsFromPEM(caCertData) {
+			return nil, fmt.Errorf("failed to parse CA certificate")
+		}
+		tlsConfig.RootCAs = caCertPool
+	}
+
+	// Load Client Cert/Key
+	clientCertData, err := getCertData(cfg.VaultClientCert, cfg.ClientCert)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load client cert: %w", err)
+	}
+	clientKeyData, err := getCertData(cfg.VaultClientKey, cfg.ClientKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load client key: %w", err)
+	}
+
+	if len(clientCertData) > 0 && len(clientKeyData) > 0 {
+		cert, err := tls.X509KeyPair(clientCertData, clientKeyData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load client key pair: %w", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{cert}
+	} else if len(clientCertData) > 0 || len(clientKeyData) > 0 {
+		return nil, fmt.Errorf("both client cert and key must be provided")
+	}
+
+	return tlsConfig, nil
+}
+
+func parseVaultLocation(loc string) (string, string) {
+	parts := strings.SplitN(loc, ":", 2)
+	if len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	return loc, "cert"
+}
+
