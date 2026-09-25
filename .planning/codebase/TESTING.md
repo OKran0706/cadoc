@@ -1,14 +1,12 @@
 # Testing Strategy
 
-## Local Environment
-- A comprehensive local testing environment exists via `docker-compose.yml` in the repository root.
-- It spins up a full pipeline: Zookeeper, Kafka, Postgres, MySQL, Redis, Detection Engine, DB Listener, and Chain Verifier.
+## Orchestration Pipeline (Local)
+- Standard testing runs under `docker-compose.yml` natively spinning up a dense simulation environment including Kafka, Postgres, MySQL, Redis, Sentinel proxies, Detection Engines, and Chain Verifiers.
+- **Init Containers**: Services like `kafka-init` automatically configure pre-requisite topic topologies.
 
-## Component Testing & Mocking
-- Run the test environment using: `docker-compose up -d`.
-- Kafka topics (`canary-events`, `canary-heartbeats`) are auto-created by an init container (`kafka-init`).
-- Certificates for testing zero-disk TLS can be generated using `test-env/generate-certs.ps1`.
-- A mock python webhook server is available in `test-env/webhook/` to test alert dispatching.
+## External Service Mocking
+- Alerting endpoints are mocked using the python scripts located in `test-env/webhook/`.
+- Vault and TLS integration verification relies on locally-generated `test-env/generate-certs.ps1` chains ensuring zero-disk testing integrity without depending on cloud components.
 
-## Integration & Verification
-- `canary_verify` tool validates the state and triggers during deployments.
+## Verification Boundaries
+- **canary_verify**: Utilized to script post-deployment functional UAT paths and enforce data expectations.

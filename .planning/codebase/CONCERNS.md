@@ -1,9 +1,9 @@
 # Concerns & Tech Debt
 
-## Security & Operations Tasks
-- **Crash Recovery**: Handling server restarts and process crashes safely in a strictly "zero-disk" environment presents operational complexities. Determining benign crashes versus malicious node isolations requires robust heartbeating and sophisticated Ansible operational playbooks.
-- **Vault Dependency**: The entire agent startup sequence is reliant on a highly available HashiCorp Vault cluster. If Vault is down, Sentinels fail to start (fail-closed), which could result in temporary monitoring blindspots.
-- **Onboarding Process**: Secure customer onboarding requires a mechanism to securely inject initial secrets into the Sentinel dynamically without leaving a disk footprint.
+## Security & Operations Risks
+- **Crash Differentiation**: In a pure Zero-Disk environment without local states, determining whether a node has maliciously crashed vs normally restarted via Ansible pipelines is highly complex. Relying strictly on heartbeats introduces blind spots.
+- **Vault Failure Domain**: Sentinel agents rely deeply on HashiCorp Vault during their `main.go` bootstrap phases. Service degradation of the Vault endpoints causes immediate "fail-closed" events region-wide.
+- **Customer Onboarding Friction**: Bootstrapping an agent manually requires strict zero-footprint TLS token passing into memory. Ensuring customers manage this securely requires sophisticated installation wrappers.
 
-## Tech Debt
-- **Legacy Cleanup**: The transition to the unified `sysutil` package meant removing various file-based and TPM legacy mechanisms. Verification of all edge cases in legacy cleanup is ongoing to ensure no sensitive data falls back to disk.
+## Legacy & Migration Artifacts
+- **Legacy Cleanup**: A complete transition to `sysutil` is intended to eradicate prior TPM and file-based keystores. Regression tests must verify that no components mistakenly attempt file fallback architectures.

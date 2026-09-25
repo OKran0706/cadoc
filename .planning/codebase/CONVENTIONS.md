@@ -1,17 +1,12 @@
 # Coding Conventions
 
-## Language Standards
-- **Go**: Follows standard Go project layout (`cmd/` for executables, `internal/` for private libraries). Uses Go modules (`go.mod` in `src/sentinel/`).
-- **Python**: Modular layouts with `requirements.txt`.
+## Framework & Language Layout
+- **Go**: Strict separation between `cmd/` for CLI execution points and `internal/` for logic. Internal packages like `config` and `sysutil` restrict public access to sensitive data functions.
+- **Python**: Used exclusively as modular helpers in testing/tooling, managed via requirements.txt and Docker containers.
 
-## Configuration & Environment Variables
-- Core components use the `CANARY_` prefix for standardizing environment variables:
-  - `CANARY_KAFKA_BROKERS`
-  - `CANARY_DB_CONN`
-  - `CANARY_PAGERDUTY_KEY`
-  - `CANARY_SLACK_WEBHOOK`
+## Configuration Standards
+- Strong adherence to environment variables prefixed with `CANARY_` for system boundaries (`CANARY_KAFKA_BROKERS`, `CANARY_DB_CONN`).
 
-## Security Practices
-- Strong requirement on **zero-disk architecture**.
-- Code accessing sensitive keys/certs MUST fetch them dynamically via the internal `sysutil` package (which replaced legacy TPM/file-based paths).
-- Components MUST adopt a "fail-closed" security posture.
+## Security Protocols
+- **Zero-Disk enforcement**: Code must strictly prevent writing of keys, TLS certificates, or sensitive Vault responses to file streams locally.
+- **Fail-Closed Policy**: Handlers must terminate or sever operation aggressively on failure—no degraded runtime permissions are allowed.
