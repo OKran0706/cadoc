@@ -1,0 +1,18 @@
+# Requirements: Canary Detection System
+
+## Core Pillars
+- **Strict Zero-Disk**: No keys, certificates, or sensitive Vault tokens are ever written to the local disk during operations.
+- **Fail-Closed Operations**: Nodes failing health checks, experiencing network isolations, or tampering must isolate/shut down predictably without degrading into insecure states.
+
+## Feature Scope (v1.0 Milestone)
+- **Feature**: Secure onboarding API
+  - Must take a `server_id` as input.
+  - Must dynamically provision a tightly scoped Vault token.
+  - Must output a drop-in deployment command for administrators.
+- **Feature**: Core pipeline hardening
+  - Sentinel A, Kafka, and the Detection Engine must communicate securely relying purely on memory arrays containing TLS keys.
+
+## Acceptance Criteria
+- [ ] `REQ-1`: The onboarding API successfully returns a single-line deployment script wrapping the generated Vault token.
+- [ ] `REQ-2`: Sentinel execution over 24 hours leaves exactly 0 files containing sensitive key material in `/tmp` or local storage volumes.
+- [ ] `REQ-3`: A forced network partition of the Kafka cluster triggers the Sentinel to gracefully fail-closed locally and log the termination.
