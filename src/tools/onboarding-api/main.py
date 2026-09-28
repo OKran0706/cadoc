@@ -35,8 +35,10 @@ async def create_scoped_token(server_id: str) -> str:
 
     payload = {
         "policies": ["canary-sentinel-policy"],
+        # Meta dictionary enforces the token's local scope.
+        # Vault's canary-sentinel-policy uses {{identity.entity.metadata.server_id}} to restrict access strictly to this node.
         "meta": {"server_id": server_id},
-        "ttl": "1h"
+        "ttl": "5m"
     }
     
     headers = {
