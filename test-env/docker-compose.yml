@@ -66,3 +66,42 @@ services:
     container_name: canary-webhook
     ports:
       - "8080:8080"
+
+  vault-init:
+    image: hashicorp/vault:latest
+    container_name: canary-vault-init
+    depends_on:
+      cert-generator:
+        condition: service_completed_successfully
+      vault:
+        condition: service_started
+    environment:
+      - VAULT_ADDR=http://vault:8200
+      - VAULT_TOKEN=root
+    volumes:
+      - ./certs:/certs
+    entrypoint: >
+      sh -c "
+      echo 'Waiting for vault API...';
+      sleep 3;
+      echo 'Writing generated certificates into Vault KV...';
+      vault kv put secret/canary/kafka ca_cert=@/certs/ca.crt client_cert=@/certs/client.crt client_key=@/certs/client.key;
+      echo 'Vault initialization complete!';
+      "
+
+  sentinel-a:
+    build:
+      context: ../src/sentinel
+      dockerfile: Dockerfile
+    container_name: canary-sentinel-a
+    privileged: true # Required for capability management in bounded kernels, ebpf graceful degradation
+    volumes:
+      - ./config:/opt/sentinel/config
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_started
+    environment:
+      - VAULT_ADDR=http://vault:8200
+    command: ["--config", "/opt/sentinel/config/sentinel.yaml", "--join-token", "root"]
