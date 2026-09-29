@@ -41,10 +41,15 @@ var authorizedShutdown int32
 
 func main() {
 	configPath := flag.String("config", "/opt/sentinel/config/sentinel.yaml", "Path to sentinel config")
+	joinToken := flag.String("join-token", "", "Initial vault bootstrap token")
 	testSign := flag.Bool("test-sign", false, "Sign a test event and exit")
 	authTicketJSON := flag.String("auth-ticket-json", "", "Raw JSON string of the signed authorization ticket for maintenance")
 	authAction := flag.String("action", "", "Action to authorize: SHUTDOWN, REDEPLOY, DEREGISTER, KILLSWITCH_ACTIVATE")
 	flag.Parse()
+
+	if *joinToken != "" {
+		os.Setenv("VAULT_TOKEN", *joinToken)
+	}
 
 	// 0. Initialize Vault Client
 	vaultClient, err := vault.New()
@@ -52,9 +57,9 @@ func main() {
 		log.Fatalf("Failed to initialize Vault client: %v", err)
 	}
 
-	// 0. Unwrap Vault Token (Approach 3 - One-Time Response Wrapping)
+	// 0. Unwrap Vault Token
 	// This ensures we have a valid VAULT_TOKEN in memory without storing it on disk.
-	if err := sysutil.UnwrapVaultToken(vaultClient, "VAULT_WRAPPED_TOKEN_A", "Sentinel-A"); err != nil {
+	if err := sysutil.UnwrapVaultToken(vaultClient, *joinToken, "Sentinel-A"); err != nil {
 		log.Printf("Vault unwrapping: %v (skipping if VAULT_TOKEN already set or not needed)", err)
 	}
 

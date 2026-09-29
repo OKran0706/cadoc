@@ -19,13 +19,12 @@ import (
 	"kernel.org/pub/linux/libs/security/libcap/cap"
 )
 
-// UnwrapVaultToken checks for a wrapped token in the environment,
-// unwraps it to get a real session token, and exports it for the process.
-func UnwrapVaultToken(vc *vault.Client, tokenEnvStr, processName string) error {
-	// Support both specific and generic env vars
-	wrapped := os.Getenv(tokenEnvStr)
+// UnwrapVaultToken unwraps it to get a real session token, and exports it for the process.
+func UnwrapVaultToken(vc *vault.Client, providedToken, processName string) error {
+	wrapped := providedToken
+	
 	if wrapped == "" {
-		wrapped = os.Getenv("VAULT_WRAPPED_TOKEN")
+		return nil // No wrapped token provided
 	}
 
 	if wrapped == "" {
@@ -38,10 +37,6 @@ func UnwrapVaultToken(vc *vault.Client, tokenEnvStr, processName string) error {
 	if err != nil {
 		return fmt.Errorf("vault unwrap failed: %w", err)
 	}
-
-	// CRITICAL: Unset the wrapped tokens so they cannot be leaked/reused
-	os.Unsetenv(tokenEnvStr)
-	os.Unsetenv("VAULT_WRAPPED_TOKEN")
 
 	log.Printf("Vault token successfully unwrapped for %s into memory\n", processName)
 	return nil
@@ -126,7 +121,7 @@ func LoadTLSConfig(cfg config.TelemetryConfig, vc *vault.Client) (*tls.Config, e
 			return []byte(strings.TrimSpace(secretStr)), nil
 		}
 		if filePath != "" {
-			return os.ReadFile(filePath)
+			return nil, fmt.Errorf("disk-based certificates are strictly prohibited within canary-system. Use vault injection")
 		}
 		return nil, nil
 	}

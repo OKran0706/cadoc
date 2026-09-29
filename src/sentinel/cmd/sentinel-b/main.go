@@ -33,8 +33,13 @@ import (
 func main() {
 	configPath := flag.String("config", "/opt/sentinel/config/sentinel.yaml", "Path to sentinel config")
 	peerPIDFile := flag.String("peer-pid-file", "/run/canary/sentinel-a.pid", "Path to sentinel-a PID file")
+	joinToken := flag.String("join-token", "", "Initial vault bootstrap token")
 	flag.Parse()
 	_ = peerPIDFile // used for mutual monitoring
+
+	if *joinToken != "" {
+		os.Setenv("VAULT_TOKEN", *joinToken)
+	}
 
 	// 0. Initialize Vault Client
 	vaultClient, err := vault.New()
@@ -42,8 +47,8 @@ func main() {
 		log.Fatalf("Failed to initialize Vault client: %v", err)
 	}
 
-	// 0. Unwrap Vault Token (Approach 3 - One-Time Response Wrapping)
-	if err := sysutil.UnwrapVaultToken(vaultClient, "VAULT_WRAPPED_TOKEN_B", "Sentinel-B"); err != nil {
+	// 0. Unwrap Vault Token
+	if err := sysutil.UnwrapVaultToken(vaultClient, *joinToken, "Sentinel-B"); err != nil {
 		log.Printf("Vault unwrapping: %v (skipping if VAULT_TOKEN already set or not needed)", err)
 	}
 

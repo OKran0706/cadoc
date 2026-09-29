@@ -121,13 +121,42 @@ class DetectionEngine:
         """Start consuming events from Kafka."""
         logger.info("Detection engine starting (brokers: %s, topic: %s)", self.kafka_brokers, self.topic)
 
+        import hvac
+        import ssl
+
+        vault_addr = os.environ.get("VAULT_ADDR")
+        vault_token = os.environ.get("VAULT_TOKEN")
+
+        ssl_context = None
+        if vault_addr and vault_token:
+            logger.info("Initializing Vault client...")
+            vault_client = hvac.Client(url=vault_addr, token=vault_token)
+            if vault_client.is_authenticated():
+                try:
+                    secret = vault_client.secrets.kv.v2.read_secret_version(path='canary/kafka')
+                    ca_cert = secret['data']['data'].get('ca_cert', '')
+                    if ca_cert:
+                        ssl_context = ssl.create_default_context()
+                        ssl_context.load_verify_locations(cadata=ca_cert)
+                        logger.info("Kafka SSL Context loaded securely into zero-disk memory via hvac")
+                except Exception as e:
+                    logger.error(f"Failed to fetch Kafka certificates dynamically: {e}")
+
+        kwargs = {
+            "bootstrap_servers": self.kafka_brokers,
+            "group_id": "detection",
+            "value_deserializer": lambda m: json.loads(m.decode("utf-8")),
+            "auto_offset_reset": "latest",
+            "enable_auto_commit": True,
+        }
+        
+        if ssl_context:
+            kwargs["security_protocol"] = "SSL"
+            kwargs["ssl_context"] = ssl_context
+
         consumer = KafkaConsumer(
             self.topic,
-            bootstrap_servers=self.kafka_brokers,
-            group_id="detection",
-            value_deserializer=lambda m: json.loads(m.decode("utf-8")),
-            auto_offset_reset="latest",
-            enable_auto_commit=True,
+            **kwargs
         )
 
         # Start dedup cleanup thread
