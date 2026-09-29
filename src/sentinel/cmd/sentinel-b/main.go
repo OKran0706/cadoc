@@ -37,14 +37,14 @@ func main() {
 	flag.Parse()
 	_ = peerPIDFile // used for mutual monitoring
 
-	if *joinToken != "" {
-		os.Setenv("VAULT_TOKEN", *joinToken)
-	}
-
 	// 0. Initialize Vault Client
 	vaultClient, err := vault.New()
 	if err != nil {
 		log.Fatalf("Failed to initialize Vault client: %v", err)
+	}
+
+	if *joinToken != "" {
+		vaultClient.SetToken(*joinToken)
 	}
 
 	// 0. Unwrap Vault Token

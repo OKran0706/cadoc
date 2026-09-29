@@ -47,14 +47,14 @@ func main() {
 	authAction := flag.String("action", "", "Action to authorize: SHUTDOWN, REDEPLOY, DEREGISTER, KILLSWITCH_ACTIVATE")
 	flag.Parse()
 
-	if *joinToken != "" {
-		os.Setenv("VAULT_TOKEN", *joinToken)
-	}
-
 	// 0. Initialize Vault Client
 	vaultClient, err := vault.New()
 	if err != nil {
 		log.Fatalf("Failed to initialize Vault client: %v", err)
+	}
+
+	if *joinToken != "" {
+		vaultClient.SetToken(*joinToken)
 	}
 
 	// 0. Unwrap Vault Token

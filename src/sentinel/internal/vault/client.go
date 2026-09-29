@@ -41,6 +41,11 @@ func New() (*Client, error) {
 	return &Client{vault: client}, nil
 }
 
+// SetToken safely injects a token strictly into process memory for this client
+func (c *Client) SetToken(token string) {
+	c.vault.SetToken(token)
+}
+
 // Unwrap takes a wrapped token and exchanges it for a real session token.
 // The session token is automatically set on the client for future use.
 func (c *Client) Unwrap(wrappedToken string) (string, error) {
@@ -76,9 +81,6 @@ func (c *Client) Unwrap(wrappedToken string) (string, error) {
 
 	// Set the real token on the client
 	c.vault.SetToken(token)
-	
-	// Also export it for any remaining sub-processes (though we aim to avoid them)
-	os.Setenv("VAULT_TOKEN", token)
 
 	return token, nil
 }
