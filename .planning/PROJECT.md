@@ -20,6 +20,18 @@ Asymmetric cost: It must be cheap for an admin to deploy, but extremely expensiv
 
 *(Cleared for next milestone)*
 
+## Current Milestone: v1.1 Sentinel Resilience & Auto-Restart Flow
+
+**Goal:** Implement secure auto-restarts as a system service, transitioning from a pure memory-only model to a hybrid disk-cert / memory-key model, with manual approval required for prolonged downtimes.
+
+**Target features:**
+- Register the Sentinel binary as an auto-restarting system service.
+- Modify the Vault fetch logic: Persist the mTLS public certificate and CA certificate on disk, but keep the private key strictly in memory.
+- Auto-replace credentials on restart: Use the persisted mTLS cert to authenticate and request fresh secrets (new mTLS cert and private key).
+- Implement downtime enforcement: If the agent is down for more than `X` minutes, block automatic credential refresh on the backend.
+- Implement wait-for-approval polling: While blocked, Sentinel enters an exponential backoff loop, polling Vault for approval without spamming the network.
+
+
 ### Out of Scope
 
 - [ ] Extending canary coverage to active PVC watchdogs and database tables — Deferred to a future milestone to focus purely on the core Sentinel-to-Kafka pipeline stability first.
