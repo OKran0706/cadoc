@@ -18,10 +18,7 @@ Asymmetric cost: It must be cheap for an admin to deploy, but extremely expensiv
 
 ### Active
 
-- [ ] Create a secure onboarding API that accepts a unique server ID and returns a drop-in deployment command for administrators.
-- [ ] Ensure the onboarding API generates a securely, tightly scoped Vault token solely for the target Sentinel.
-- [ ] Audit and harden existing Sentinel A, Kafka, and Detection Engine pipeline to strictly enforce zero-disk operations and remove legacy fallback paths.
-- [ ] Fortify the fail-closed mechanism to ensure nodes gracefully isolate or crash predictably on tampering.
+*(Cleared for next milestone)*
 
 ### Out of Scope
 
@@ -29,7 +26,7 @@ Asymmetric cost: It must be cheap for an admin to deploy, but extremely expensiv
 
 ## Context
 
-Current milestone aims to get the core pipeline (Sentinel A -> Kafka -> Detection Engine) "production ready." We have existing code but need to eliminate manual deployment friction and solidify the tamper-resistance of the agent layer.
+Shipped v1.0 Milestone "Core Pipeline & Onboarding" with known gaps (requirements unmet). Restarting planning for the next milestone.
 
 ## Constraints
 
@@ -60,4 +57,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: April 1, 2026 after project initialization*
+*Last updated: 2026-04-17 after v1.0 milestone*

@@ -1,18 +1,16 @@
 # Roadmap: Canary Detection System
 
-## Milestone: v1.0 — Core Pipeline & Onboarding
+## Milestones
 
-### Phase 1: Secure Onboarding API
-**Goal:** Build the API that accepts a `server_id`, mints a scoped HashiCorp Vault token, and returns a drop-in deployment command.
-- **Focus**: Vault API integration, endpoint routing, and script wrapping.
-- **Dependencies**: None.
+- ✅ **v1.0 Core Pipeline & Onboarding** — Phases 1-3 (shipped 2026-04-17)
 
-### Phase 2: Core Pipeline Hardening (Zero-Disk)
-**Goal:** Audit the existing Sentinel A, Kafka, and Detection Engine interactions to enforce the strict zero-disk policy.
-- **Focus**: Replacing legacy file-based cert usage with the `sysutil` internal package.
-- **Dependencies**: Phase 1.
+## Phases
 
-### Phase 3: Fail-Closed Resiliency
-**Goal:** Fortify the fail-closed mechanism to differentiate network drops from tampering.
-- **Focus**: eBPF interaction audits, connection timeout behaviors, and reliable heartbeat metrics.
-- **Dependencies**: Phase 2.
+<details>
+<summary>✅ v1.0 Core Pipeline & Onboarding (Phases 1-3) — SHIPPED 2026-04-17</summary>
+
+- [x] Phase 1: Secure Onboarding API (1 plan) — completed 2026-04-17
+- [x] Phase 2: Core Pipeline Hardening (1 plan) — completed 2026-04-17
+- [x] Phase 3: Fail-Closed Resiliency (0 plans) — completed 2026-04-17
+
+</details>
