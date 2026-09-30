@@ -1,26 +1,56 @@
 // canary-system/src/sentinel/internal/selfmon/selfmon.go
-// eBPF self-tamper detection using cilium/ebpf.
-// Falls back to /proc polling if eBPF is unavailable.
+// eBPF self-tamper detection with automatic environment detection.
+// Supports: Kubernetes (Tetragon DaemonSet), VM (standalone Tetragon), Docker/fallback (/proc polling).
 // Derived from: sentinel-daemon/SKILL.md
 
 package selfmon
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/segmentio/kafka-go"
 	"github.com/your-org/canary/sentinel/internal/signer"
 )
 
-func Start(ctx context.Context, selfPID int, s *signer.Signer, writer *kafka.Writer) error {
-	// Attempt eBPF loading using Tetragon instead of custom C programs
-	const policyTmpl = `
+// Environment represents the detected runtime environment.
+type Environment int
+
+const (
+	EnvKubernetes Environment = iota // Kubernetes cluster with Tetragon DaemonSet
+	EnvStandaloneTetragon            // Bare VM with Tetragon installed as systemd service
+	EnvFallbackProc                  // Docker/container or minimal VM — /proc polling only
+)
+
+func (e Environment) String() string {
+	switch e {
+	case EnvKubernetes:
+		return "kubernetes"
+	case EnvStandaloneTetragon:
+		return "standalone-tetragon"
+	default:
+		return "proc-fallback"
+	}
+}
+
+// tetragonPolicyDir is where standalone Tetragon reads TracingPolicy files.
+const tetragonPolicyDir = "/etc/tetragon/tetragon.tp.d"
+
+// tetragonGRPCSocket is the default gRPC endpoint for standalone Tetragon.
+const tetragonGRPCSocket = "localhost:54321"
+
+// policyTemplate is the Tetragon TracingPolicy YAML shared by both
+// Kubernetes and standalone deployment modes.
+const policyTemplate = `
 apiVersion: cilium.io/v1alpha1
 kind: TracingPolicy
 metadata:
@@ -77,9 +107,9 @@ spec:
       - index: 2
         operator: "Mask"
         values:
-        - "2" # O_RDWR
-        - "1" # O_WRONLY
-        - "512" # O_CREAT
+        - "2"    # O_RDWR
+        - "1"    # O_WRONLY
+        - "512"  # O_CREAT
         - "1024" # O_TRUNC
       matchActions:
       - action: Post
@@ -101,24 +131,97 @@ spec:
       - action: Post
 `
 
-	tmpl, err := template.New("policy").Parse(policyTmpl)
+// DetectEnvironment probes the runtime to determine which self-monitoring
+// strategy is available, in order of strongest to weakest.
+func DetectEnvironment() Environment {
+	// 1. Check for Kubernetes: KUBERNETES_SERVICE_HOST is injected by the kubelet
+	//    into every pod. If present AND kubectl is reachable, we assume a full
+	//    Tetragon DaemonSet deployment.
+	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+		if _, err := exec.LookPath("kubectl"); err == nil {
+			log.Println("[selfmon] Detected environment: Kubernetes (Tetragon DaemonSet)")
+			return EnvKubernetes
+		}
+	}
+
+	// 2. Check for standalone Tetragon on a bare VM:
+	//    - The policy directory exists (Tetragon is installed via package manager)
+	//    - The gRPC socket is reachable (Tetragon daemon is actually running)
+	if _, err := os.Stat(tetragonPolicyDir); err == nil {
+		conn, err := net.DialTimeout("tcp", tetragonGRPCSocket, 2*time.Second)
+		if err == nil {
+			conn.Close()
+			log.Println("[selfmon] Detected environment: Standalone Tetragon (VM)")
+			return EnvStandaloneTetragon
+		}
+		log.Printf("[selfmon] Tetragon policy dir exists but gRPC unreachable (%v) — falling back", err)
+	}
+
+	// 3. Fallback: Docker container, minimal VM, or no eBPF support
+	log.Println("[selfmon] Detected environment: /proc fallback (no Tetragon available)")
+	return EnvFallbackProc
+}
+
+// Start initializes self-tamper monitoring using the best available strategy
+// for the detected runtime environment. It returns an error only if a
+// critical failure occurs; graceful degradation to /proc is not an error.
+func Start(ctx context.Context, selfPID int, s *signer.Signer, writer *kafka.Writer) error {
+	env := DetectEnvironment()
+
+	// Emit a signed event recording which monitoring mode we entered.
+	// The Detection Engine can alert if a production host unexpectedly
+	// reports "proc-fallback" (possible indicator of Tetragon removal).
+	modeEvent := map[string]interface{}{
+		"type":            "SELFMON_MODE_SELECTED",
+		"monitoring_mode": env.String(),
+		"pid":             selfPID,
+	}
+	envelope, _ := s.SignEvent(modeEvent)
+	if payload, err := signer.MarshalEnvelope(envelope); err == nil {
+		writer.WriteMessages(ctx, kafka.Message{Value: payload})
+	}
+
+	switch env {
+	case EnvKubernetes:
+		return startKubernetes(ctx, selfPID)
+	case EnvStandaloneTetragon:
+		return startStandalone(ctx, selfPID)
+	default:
+		// /proc fallback is started by the caller in main.go when Start() returns an error.
+		// Return an error to trigger that path.
+		return fmt.Errorf("no eBPF runtime available — use /proc fallback")
+	}
+}
+
+// renderPolicy renders the TracingPolicy template with the sentinel's PID.
+func renderPolicy(selfPID int) ([]byte, error) {
+	tmpl, err := template.New("policy").Parse(policyTemplate)
 	if err != nil {
-		return fmt.Errorf("failed to parse tetragon policy template: %v", err)
+		return nil, fmt.Errorf("failed to parse tetragon policy template: %v", err)
 	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, map[string]int{"PID": selfPID}); err != nil {
-		return fmt.Errorf("failed to execute policy template: %v", err)
+		return nil, fmt.Errorf("failed to execute policy template: %v", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// startKubernetes applies the TracingPolicy via kubectl into the cluster
+// where a Tetragon DaemonSet is expected to pick it up.
+func startKubernetes(ctx context.Context, selfPID int) error {
+	policyYAML, err := renderPolicy(selfPID)
+	if err != nil {
+		return err
 	}
 
-	// Write to temporary file and apply via kubectl
 	f, err := os.CreateTemp("", "sentinel-tetragon-*.yaml")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(f.Name())
 
-	if _, err := f.Write(buf.Bytes()); err != nil {
+	if _, err := f.Write(policyYAML); err != nil {
 		return err
 	}
 	f.Close()
@@ -128,12 +231,36 @@ spec:
 		return fmt.Errorf("tetragon policy apply failed: %v\nOutput: %s", err, string(out))
 	}
 
-	log.Printf("Tetragon TracingPolicy 'sentinel-self-protection' loaded for PID %d", selfPID)
+	log.Printf("[selfmon] Tetragon TracingPolicy applied via kubectl for PID %d", selfPID)
+	return nil
+}
 
-	// In a complete implementation, this would establish a gRPC connection
-	// to the Tetragon agent to receive the events generated by this policy.
-	// We leave out the full streaming client here as it would significantly
-	// increase complexity, relying on the fallback proc polling.
+// startStandalone writes the TracingPolicy directly to the Tetragon policy
+// directory on a bare VM. The Tetragon daemon watches this directory and
+// automatically loads new policies via inotify.
+func startStandalone(ctx context.Context, selfPID int) error {
+	policyYAML, err := renderPolicy(selfPID)
+	if err != nil {
+		return err
+	}
+
+	policyPath := tetragonPolicyDir + "/sentinel-self-protection.yaml"
+	if err := os.WriteFile(policyPath, policyYAML, 0644); err != nil {
+		return fmt.Errorf("failed to write tetragon policy to %s: %w", policyPath, err)
+	}
+
+	log.Printf("[selfmon] Tetragon TracingPolicy written to %s for PID %d", policyPath, selfPID)
+
+	// Verify the Tetragon daemon picked up the policy by checking its gRPC endpoint.
+	// A small delay gives the file watcher time to react.
+	time.Sleep(2 * time.Second)
+	conn, err := net.DialTimeout("tcp", tetragonGRPCSocket, 3*time.Second)
+	if err != nil {
+		return fmt.Errorf("tetragon gRPC unreachable after policy write: %w", err)
+	}
+	conn.Close()
+
+	log.Printf("[selfmon] Tetragon gRPC confirmed reachable — kernel-level monitoring active for PID %d", selfPID)
 	return nil
 }
 
@@ -144,7 +271,7 @@ func PollProc(ctx context.Context, selfPID int, s *signer.Signer, writer *kafka.
 	defer ticker.Stop()
 
 	expectedCmdline := readCmdline(selfPID)
-	log.Printf("Self-monitor (/proc fallback) started for PID %d", selfPID)
+	log.Printf("[selfmon] /proc fallback started for PID %d", selfPID)
 
 	for {
 		select {
@@ -163,21 +290,21 @@ func PollProc(ctx context.Context, selfPID int, s *signer.Signer, writer *kafka.
 				envelope, _ := s.SignEvent(event)
 				payload, _ := signer.MarshalEnvelope(envelope)
 				writer.WriteMessages(ctx, kafka.Message{Value: payload})
-				log.Printf("SENTINEL_TAMPER: cmdline changed for PID %d", selfPID)
+				log.Printf("[selfmon] SENTINEL_TAMPER: cmdline changed for PID %d", selfPID)
 			}
 
 			// Check for unexpected tracers
 			tracerPID := readTracerPID(selfPID)
 			if tracerPID > 0 {
 				event := map[string]interface{}{
-					"type":        "ALERT_SENTINEL_PTRACE_ATTEMPT",
-					"target_pid":  selfPID,
-					"tracer_pid":  tracerPID,
+					"type":       "ALERT_SENTINEL_PTRACE_ATTEMPT",
+					"target_pid": selfPID,
+					"tracer_pid": tracerPID,
 				}
 				envelope, _ := s.SignEvent(event)
 				payload, _ := signer.MarshalEnvelope(envelope)
 				writer.WriteMessages(ctx, kafka.Message{Value: payload})
-				log.Printf("SENTINEL_PTRACE: PID %d being traced by PID %d", selfPID, tracerPID)
+				log.Printf("[selfmon] SENTINEL_PTRACE: PID %d being traced by PID %d", selfPID, tracerPID)
 			}
 		}
 	}

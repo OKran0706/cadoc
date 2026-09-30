@@ -5,7 +5,6 @@
 package vault
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -70,8 +69,8 @@ func (c *Client) Unwrap(wrappedToken string) (string, error) {
 	token, ok := secret.Data["token"].(string)
 	if !ok {
 		// Fallback for some Vault versions/responses
-		if auth, ok := secret.Auth.(*api.SecretAuth); ok {
-			token = auth.ClientToken
+		if secret.Auth != nil {
+			token = secret.Auth.ClientToken
 		}
 	}
 

@@ -36,6 +36,7 @@ func New(cfg config.SigningConfig) (*Signer, error) {
 	hostname, _ := os.Hostname()
 
 	var privKey ed25519.PrivateKey
+	var pubKeyFP string
 	switch strings.ToLower(cfg.KeySource) {
 	case "vault":
 		// Fetch private key from Vault (held in memory only) via API library

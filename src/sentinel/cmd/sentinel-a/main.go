@@ -7,8 +7,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -26,7 +24,8 @@ import (
 
 	"github.com/your-org/canary/sentinel/internal/auth"
 	"github.com/your-org/canary/sentinel/internal/config"
-	"github.com/your-org/canary/sentinel/internal/heartbeat"
+	// "github.com/your-org/canary/sentinel/internal/heartbeat" // Phase 1: Sentinel-B not shipped
+	"github.com/your-org/canary/sentinel/internal/deployer_daemon"
 	"github.com/your-org/canary/sentinel/internal/selfmon"
 	"github.com/your-org/canary/sentinel/internal/signer"
 	"github.com/your-org/canary/sentinel/internal/sysutil"
@@ -40,11 +39,19 @@ import (
 var authorizedShutdown int32
 
 func main() {
+	log.Println("=== SENTINEL-A DAEMON BOOTING (MERGED VERSION) ===")
 	configPath := flag.String("config", "/opt/sentinel/config/sentinel.yaml", "Path to sentinel config")
 	joinToken := flag.String("join-token", "", "Initial vault bootstrap token")
 	testSign := flag.Bool("test-sign", false, "Sign a test event and exit")
 	authTicketJSON := flag.String("auth-ticket-json", "", "Raw JSON string of the signed authorization ticket for maintenance")
 	authAction := flag.String("action", "", "Action to authorize: SHUTDOWN, REDEPLOY, DEREGISTER, KILLSWITCH_ACTIVATE")
+
+	// Canary Deployer subsystem flags
+	deployerProfile := flag.String("deployer-profile", "", "Canary profile (app-server, db-server, etc.)")
+	deployerConfigDir := flag.String("deployer-config", "/opt/canary/config", "Path to canary profile configs")
+	deployerTemplateDir := flag.String("deployer-templates", "/opt/sentinel/templates", "Path to canary templates")
+	deployerInterval := flag.Int("deployer-interval", 3600, "Base canary rotation interval (seconds)")
+	deployerMaxJitter := flag.Int("deployer-max-jitter", 1800, "Max random jitter for rotation (seconds)")
 	flag.Parse()
 
 	// 0. Initialize Vault Client
@@ -227,25 +234,38 @@ func main() {
 	payload, _ := signer.MarshalEnvelope(envelope)
 	writer.WriteMessages(ctx, kafka.Message{Value: payload})
 
-	// Start heartbeat server (sentinel-b will connect to this)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if err := heartbeat.Serve(ctx, cfg.Watchdog.PeerSocket+"-a", "sentinel-a"); err != nil {
-			log.Printf("Heartbeat server error: %v", err)
-		}
-	}()
+	// 5. Start internal Canary Deployer subsystem
+	if *deployerProfile != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			deployer_daemon.StartDaemon(ctx, *deployerProfile, *deployerConfigDir, *deployerTemplateDir, *deployerInterval, *deployerMaxJitter, s, writer)
+		}()
+	}
 
-	// Start peer heartbeat checker (monitors sentinel-b)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		heartbeat.MonitorPeer(ctx, cfg.Watchdog.PeerSocket+"-b",
-			time.Duration(cfg.Watchdog.HeartbeatIntervalSeconds)*time.Second,
-			time.Duration(cfg.Watchdog.AlertThresholdSeconds)*time.Second,
-			cfg.OOBAlert.URL,
-		)
-	}()
+	// Phase 1: Sentinel-B is not shipped. The heartbeat server and peer
+	// monitor are disabled to avoid false SENTINEL_DOWN alerts.
+	// Uncomment when Sentinel-B is deployed.
+	//
+	// // Start heartbeat server (sentinel-b will connect to this)
+	// wg.Add(1)
+	// go func() {
+	// 	defer wg.Done()
+	// 	if err := heartbeat.Serve(ctx, cfg.Watchdog.PeerSocket+"-a", "sentinel-a"); err != nil {
+	// 		log.Printf("Heartbeat server error: %v", err)
+	// 	}
+	// }()
+	//
+	// // Start peer heartbeat checker (monitors sentinel-b)
+	// wg.Add(1)
+	// go func() {
+	// 	defer wg.Done()
+	// 	heartbeat.MonitorPeer(ctx, cfg.Watchdog.PeerSocket+"-b",
+	// 		time.Duration(cfg.Watchdog.HeartbeatIntervalSeconds)*time.Second,
+	// 		time.Duration(cfg.Watchdog.AlertThresholdSeconds)*time.Second,
+	// 		cfg.OOBAlert.URL,
+	// 	)
+	// }()
 
 	// 5. Start Kill Switch Poller (requires signed ticket from Vault)
 	wg.Add(1)

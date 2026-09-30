@@ -1,0 +1,17 @@
+profile: app-server
+target_directories:
+  - path: /opt/canary/deployed/configs
+    canary_type: env_file
+    count: 2
+    blend_with: ""
+  - path: /opt/canary/deployed/keys
+    canary_type: ssh_key
+    count: 1
+    blend_with: ""
+  - path: /opt/canary/deployed/credentials
+    canary_type: credentials
+    count: 1
+    blend_with: ""
+naming_strategy: realistic
+timestamp_strategy: blend_neighbors
+permission_strategy: match_directory

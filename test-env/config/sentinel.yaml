@@ -2,10 +2,7 @@ telemetry:
   kafka_brokers:
     - canary-kafka:9092
   topic: canary-events
-  tls: true
-  vault_ca_cert: secret/data/canary/kafka:ca_cert
-  vault_client_cert: secret/data/canary/kafka:client_cert
-  vault_client_key: secret/data/canary/kafka:client_key
+  tls: false
 
 oob_alert:
   url: http://canary-webhook:8080
@@ -16,6 +13,7 @@ watchdog:
   alert_threshold_seconds: 30
 
 signing:
+  key_source: vault
   vault_path: secret/data/canary/signer
   vault_field: private_key
 

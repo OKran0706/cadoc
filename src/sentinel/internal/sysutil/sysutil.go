@@ -64,7 +64,11 @@ func DropCapabilitiesAfterInit() error {
 	if err != nil {
 		return err
 	}
-	if verify.GetFlag(cap.Effective, cap.SYS_ADMIN) {
+	flagSet, err := verify.GetFlag(cap.Effective, cap.SYS_ADMIN)
+	if err != nil {
+		return err
+	}
+	if flagSet {
 		return fmt.Errorf("CAP_SYS_ADMIN still effective after drop — aborting")
 	}
 	return nil

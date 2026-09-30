@@ -1,0 +1,21 @@
+{{- /* canary-system/src/canary_deployer/templates/dumps/db_dump.tmpl */ -}}
+{{- /* Derived from: file-canary-engine/SKILL.md — Content Templates */ -}}
+-- PostgreSQL database dump
+-- Dumped from database version 14.9
+-- Dumped by pg_dump version 14.9
+-- Started on {{.BlendedDate}}
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET client_encoding = 'UTF8';
+
+CREATE TABLE public.users (
+    id serial PRIMARY KEY,
+    email varchar(255) NOT NULL,
+    password_hash varchar(128),
+    api_key varchar(64) DEFAULT '{{.RandomHex 32}}',
+    created_at timestamp with time zone DEFAULT now()
+);
+
+INSERT INTO public.users VALUES (1, 'admin@{{.RandomAlpha 8}}.com', '{{.RandomBase64 40}}', '{{.RandomHex 32}}', '{{.BlendedDate}}');
+INSERT INTO public.users VALUES (2, 'deploy@internal', '{{.RandomBase64 40}}', '{{.RandomHex 32}}', '{{.BlendedDate}}');
