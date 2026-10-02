@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/your-org/canary/sentinel/internal/config"
@@ -105,7 +106,10 @@ func VerifySelfIntegrity(binaryName string) (expected string, actual string, err
 }
 
 // LoadTLSConfig creates a tls.Config fetching certs from Vault if configured.
-func LoadTLSConfig(cfg config.TelemetryConfig, vc *vault.Client) (*tls.Config, error) {
+// If diskFallback is true and Vault locations are empty, it will attempt to load
+// certs from the file paths in config (used during restart without join-token).
+// The private key is ALWAYS sourced from Vault — never from disk.
+func LoadTLSConfig(cfg config.TelemetryConfig, vc *vault.Client, diskFallback bool) (*tls.Config, error) {
 	if !cfg.TLS {
 		return nil, nil
 	}
@@ -124,8 +128,12 @@ func LoadTLSConfig(cfg config.TelemetryConfig, vc *vault.Client) (*tls.Config, e
 			}
 			return []byte(strings.TrimSpace(secretStr)), nil
 		}
-		if filePath != "" {
-			return nil, fmt.Errorf("disk-based certificates are strictly prohibited within canary-system. Use vault injection")
+		if filePath != "" && diskFallback {
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				return nil, fmt.Errorf("read cert file %s: %w", filePath, err)
+			}
+			return data, nil
 		}
 		return nil, nil
 	}
@@ -148,7 +156,8 @@ func LoadTLSConfig(cfg config.TelemetryConfig, vc *vault.Client) (*tls.Config, e
 	if err != nil {
 		return nil, fmt.Errorf("failed to load client cert: %w", err)
 	}
-	clientKeyData, err := getCertData(cfg.VaultClientKey, cfg.ClientKey)
+	// Private key is ALWAYS from Vault — never from disk
+	clientKeyData, err := getCertData(cfg.VaultClientKey, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to load client key: %w", err)
 	}
@@ -166,6 +175,45 @@ func LoadTLSConfig(cfg config.TelemetryConfig, vc *vault.Client) (*tls.Config, e
 	return tlsConfig, nil
 }
 
+// PersistPublicCerts writes the CA and mTLS public certificates to disk
+// using atomic write (write-to-temp + rename) to prevent corruption.
+// The private key is NEVER written — this function only handles public material.
+func PersistPublicCerts(stateDir string, caCert, clientCert []byte) error {
+	if err := atomicWrite(filepath.Join(stateDir, "ca.crt"), caCert); err != nil {
+		return fmt.Errorf("persist ca.crt: %w", err)
+	}
+	if err := atomicWrite(filepath.Join(stateDir, "mtls.crt"), clientCert); err != nil {
+		return fmt.Errorf("persist mtls.crt: %w", err)
+	}
+	log.Printf("Persisted public certs to %s (private key remains in memory only)", stateDir)
+	return nil
+}
+
+// LoadPersistedCerts reads the CA and mTLS public certificates from disk.
+// Returns os.ErrNotExist if either file is missing.
+func LoadPersistedCerts(stateDir string) (caCert []byte, clientCert []byte, err error) {
+	caCert, err = os.ReadFile(filepath.Join(stateDir, "ca.crt"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("load ca.crt: %w", err)
+	}
+	clientCert, err = os.ReadFile(filepath.Join(stateDir, "mtls.crt"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("load mtls.crt: %w", err)
+	}
+	log.Printf("Loaded persisted public certs from %s", stateDir)
+	return caCert, clientCert, nil
+}
+
+// atomicWrite writes data to a temp file then renames it to the target path.
+// This ensures the target file is never left in a partially-written state.
+func atomicWrite(path string, data []byte) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
 func parseVaultLocation(loc string) (string, string) {
 	parts := strings.SplitN(loc, ":", 2)
 	if len(parts) == 2 {
@@ -173,4 +221,5 @@ func parseVaultLocation(loc string) (string, string) {
 	}
 	return loc, "cert"
 }
+
 
