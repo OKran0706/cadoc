@@ -18,12 +18,14 @@ CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_NET_ADMIN
 AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_NET_ADMIN
 
 # --- Filesystem Sandboxing ---
-# Make the entire root filesystem read-only. Only /var/lib/canary
-# (provisioned automatically by StateDirectory) is writable.
-ProtectSystem=strict
+# Protect system binaries (/usr, /boot) from modification but allow
+# writes to the rest of the filesystem. Sentinel needs runtime CRUD
+# on canary decoy files planted at arbitrary paths (/home, /var, /etc).
+ProtectSystem=full
 StateDirectory=canary
 PrivateTmp=true
-ProtectHome=yes
+# NOTE: ProtectHome is intentionally omitted — Sentinel plants
+# canary decoy files in user home directories at runtime.
 
 # --- Additional Hardening ---
 NoNewPrivileges=true
