@@ -1,0 +1,35 @@
+[Unit]
+Description=Canary Sentinel Daemon
+Documentation=https://github.com/OKran0706/cadoc
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/canary/sentinel
+Restart=always
+RestartSec=10
+
+# --- Capability Bounding ---
+# Run as root but drop all capabilities except those required for
+# eBPF telemetry (CAP_BPF, CAP_PERFMON, CAP_SYS_RESOURCE) and
+# network egress to Kafka (CAP_NET_ADMIN).
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_NET_ADMIN
+AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_NET_ADMIN
+
+# --- Filesystem Sandboxing ---
+# Make the entire root filesystem read-only. Only /var/lib/canary
+# (provisioned automatically by StateDirectory) is writable.
+ProtectSystem=strict
+StateDirectory=canary
+PrivateTmp=true
+ProtectHome=yes
+
+# --- Additional Hardening ---
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
