@@ -5,7 +5,9 @@
 package vault
 
 import (
+	"crypto/tls"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
@@ -38,6 +40,39 @@ func New() (*Client, error) {
 	}
 
 	return &Client{vault: client}, nil
+}
+
+// SetTLSConfig updates the underlying Vault client with a specific TLS configuration.
+// Required for cert-based re-authentication.
+func (c *Client) SetTLSConfig(tlsConfig *tls.Config) error {
+	apiConfig := c.vault.CloneConfig()
+	apiConfig.HttpClient.Transport = &http.Transport{
+		TLSClientConfig: tlsConfig,
+	}
+	client, err := api.NewClient(apiConfig)
+	if err != nil {
+		return err
+	}
+	c.vault = client
+	return nil
+}
+
+// LoginWithCert authenticates to Vault using the mTLS certificate configured on the client.
+// Returns the new session token.
+func (c *Client) LoginWithCert() (string, error) {
+	// Vault's cert auth mount is usually at auth/cert
+	secret, err := c.vault.Logical().Write("auth/cert/login", nil)
+	if err != nil {
+		return "", err
+	}
+
+	if secret == nil || secret.Auth == nil {
+		return "", fmt.Errorf("cert login failed: no authentication info returned")
+	}
+
+	token := secret.Auth.ClientToken
+	c.vault.SetToken(token)
+	return token, nil
 }
 
 // SetToken safely injects a token strictly into process memory for this client
