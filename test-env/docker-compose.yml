@@ -84,14 +84,28 @@ services:
       - ./certs:/certs
     entrypoint: >
       sh -c "
+      set -e;
+      export VAULT_TOKEN=root;
+      export VAULT_ADDR=http://vault:8200;
       echo 'Waiting for vault API...';
-      sleep 3;
+      while ! vault status > /dev/null 2>&1; do sleep 1; done;
+      
       echo 'Writing generated certificates into Vault KV...';
-      vault kv put secret/canary/kafka ca_cert=@/certs/ca.crt client_cert=@/certs/client.crt client_key=@/certs/client.key;
-      echo 'Generating Sentinel test signing key...';
+      vault kv put secret/canary/kafka ca_cert=@/certs/ca.crt client_cert=@/certs/kafka.crt client_key=@/certs/kafka.key;
+      echo 'Kafka certs written to Vault.';
+      
+      echo 'Generating Identity test signing key...';
       vault kv put secret/canary/signer private_key=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef;
+      echo 'Identity signing key written to Vault.';
+      
       echo 'Generating Authority test control key...';
       vault kv put secret/canary/control auth_pubkey=0123456789abcdef0123456789abcdef;
+      echo 'Authority control key written to Vault.';
+      
+      echo 'Enabling cert auth in Vault...';
+      vault auth enable cert || echo 'Cert auth already enabled';
+      vault write auth/cert/certs/sentinel certificate=@/certs/ca.crt token_policies=default token_ttl=1h;
+      
       echo 'Vault initialization complete!';
       "
 
@@ -113,6 +127,7 @@ services:
     environment:
       - VAULT_ADDR=http://vault:8200
       - VAULT_TOKEN=root
+      - STATE_DIRECTORY=/tmp/canary
     command: [
       "--config", "/opt/sentinel/config/sentinel.yaml", 
       "--join-token", "root",

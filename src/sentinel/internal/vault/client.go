@@ -45,6 +45,7 @@ func New() (*Client, error) {
 // SetTLSConfig updates the underlying Vault client with a specific TLS configuration.
 // Required for cert-based re-authentication.
 func (c *Client) SetTLSConfig(tlsConfig *tls.Config) error {
+	token := c.vault.Token() // Preserve existing session token
 	apiConfig := c.vault.CloneConfig()
 	apiConfig.HttpClient.Transport = &http.Transport{
 		TLSClientConfig: tlsConfig,
@@ -54,6 +55,7 @@ func (c *Client) SetTLSConfig(tlsConfig *tls.Config) error {
 		return err
 	}
 	c.vault = client
+	c.vault.SetToken(token) // Restore session token
 	return nil
 }
 
@@ -96,21 +98,26 @@ func (c *Client) Unwrap(wrappedToken string) (string, error) {
 		return "", fmt.Errorf("vault unwrap failed: %w", err)
 	}
 
-	if secret == nil || secret.Data == nil {
-		return "", fmt.Errorf("unwrapped secret is empty")
+	if secret == nil {
+		return "", fmt.Errorf("unwrapped response is nil")
 	}
 
-	// Extract tokens from common fields (KV v1 vs v2)
-	token, ok := secret.Data["token"].(string)
-	if !ok {
-		// Fallback for some Vault versions/responses
-		if secret.Auth != nil {
-			token = secret.Auth.ClientToken
+	var token string
+
+	// Extract tokens from Auth section (standard for wrapped tokens)
+	if secret.Auth != nil {
+		token = secret.Auth.ClientToken
+	}
+
+	// Fallback/Override from Data section (if it's a generic KV unwrap)
+	if token == "" && secret.Data != nil {
+		if val, ok := secret.Data["token"].(string); ok {
+			token = val
 		}
 	}
 
 	if token == "" {
-		return "", fmt.Errorf("could not find 'token' in unwrapped response")
+		return "", fmt.Errorf("could not find 'token' in unwrapped response (Data and Auth are empty)")
 	}
 
 	// Set the real token on the client
@@ -120,18 +127,25 @@ func (c *Client) Unwrap(wrappedToken string) (string, error) {
 }
 
 // GetSecretField retrieves a single field from a KV secret path.
-// Supports both KV v1 and v2.
+// Supports both KV v1 and v2 by automatically handling path and data structure differences.
 func (c *Client) GetSecretField(path, field string) (string, error) {
-	secret, err := c.vault.Logical().Read(path)
+	apiPath := path
+	// If it's a KV v2 engine, we need to inject /data/ after the mount point (e.g., secret/data/...)
+	// In the Canary ecosystem, we assume 'secret/' is the mount point for general secrets.
+	if strings.HasPrefix(path, "secret/") && !strings.HasPrefix(path, "secret/data/") {
+		apiPath = strings.Replace(path, "secret/", "secret/data/", 1)
+	}
+
+	secret, err := c.vault.Logical().Read(apiPath)
 	if err != nil {
-		return "", fmt.Errorf("read secret %s: %w", path, err)
+		return "", fmt.Errorf("read secret %s (api: %s): %w", path, apiPath, err)
 	}
 
 	if secret == nil || secret.Data == nil {
-		return "", fmt.Errorf("secret %s not found or empty", path)
+		return "", fmt.Errorf("secret %s not found or empty (api: %s)", path, apiPath)
 	}
 
-	// Handle KV v2 (data is under the "data" sub-field)
+	// Handle KV v2 structure (actual data is nested under "data" key)
 	data := secret.Data
 	if subData, ok := secret.Data["data"].(map[string]interface{}); ok {
 		data = subData

@@ -31,18 +31,16 @@ type Signer struct {
 }
 
 // New creates a Signer from the signing configuration.
-// Supports key_source: "file" | "tpm" | "vault"
-func New(cfg config.SigningConfig) (*Signer, error) {
+// Supports key_source: "vault" (mTLS/Token)
+func New(cfg config.SigningConfig, vc *vault.Client) (*Signer, error) {
 	hostname, _ := os.Hostname()
 
 	var privKey ed25519.PrivateKey
 	var pubKeyFP string
 	switch strings.ToLower(cfg.KeySource) {
 	case "vault":
-		// Fetch private key from Vault (held in memory only) via API library
-		vc, err := vault.New()
-		if err != nil {
-			return nil, fmt.Errorf("init vault client: %w", err)
+		if vc == nil {
+			return nil, fmt.Errorf("vault client required for 'vault' key_source")
 		}
 
 		keyStr, err := vc.GetSecretField(cfg.VaultPath, cfg.VaultField)

@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -110,10 +111,6 @@ func VerifySelfIntegrity(binaryName string) (expected string, actual string, err
 // certs from the file paths in config (used during restart without join-token).
 // The private key is ALWAYS sourced from Vault — never from disk.
 func LoadTLSConfig(cfg config.TelemetryConfig, vc *vault.Client, diskFallback bool) (*tls.Config, []byte, []byte, error) {
-	if !cfg.TLS {
-		return nil, nil, nil, nil
-	}
-
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 	}
@@ -182,6 +179,9 @@ func LoadTLSConfig(cfg config.TelemetryConfig, vc *vault.Client, diskFallback bo
 // using atomic write (write-to-temp + rename) to prevent corruption.
 // The private key is NEVER written — this function only handles public material.
 func PersistPublicCerts(stateDir string, caCert, clientCert []byte) error {
+	if err := os.MkdirAll(stateDir, 0700); err != nil {
+		return fmt.Errorf("create state dir %s: %w", stateDir, err)
+	}
 	if err := atomicWrite(filepath.Join(stateDir, "ca.crt"), caCert); err != nil {
 		return fmt.Errorf("persist ca.crt: %w", err)
 	}
@@ -205,6 +205,12 @@ func LoadPersistedCerts(stateDir string) (caCert []byte, clientCert []byte, err 
 	}
 	log.Printf("Loaded persisted public certs from %s", stateDir)
 	return caCert, clientCert, nil
+}
+
+// IsCommandAvailable checks if a command exists in the system PATH.
+func IsCommandAvailable(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
 }
 
 // atomicWrite writes data to a temp file then renames it to the target path.

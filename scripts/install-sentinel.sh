@@ -34,38 +34,14 @@ else
   echo "      Ensure the binary is placed at ${INSTALL_DIR}/sentinel before starting."
 fi
 
-# --- Argument Parsing ---
-JOIN_TOKEN=""
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    --join-token)
-      JOIN_TOKEN="$2"
-      shift 2
-      ;;
-    *)
-      shift
-      ;;
-  esac
-done
-
 # --- Install systemd unit ---
 echo "[*] Installing systemd service unit..."
 cp deploy/sentinel.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable sentinel.service
 
-# --- Bootstrap/Start ---
-if [ -n "$JOIN_TOKEN" ]; then
-  echo "[*] Bootstrapping Sentinel with join token..."
-  # Use a transient override to pass the token for the first run only
-  systemctl set-property sentinel.service Environment="SENTINEL_JOIN_TOKEN=$JOIN_TOKEN"
-  systemctl start sentinel.service
-  echo "[✓] Sentinel bootstrapped and started."
-else
-  echo "[!] No join token provided. Service enabled but NOT started."
-  echo "    To start manually: sudo systemctl start sentinel"
-fi
-
 echo "[✓] Installation complete."
+echo "    Note: Service is ENABLED but NOT started."
+echo "    To bootstrap: sudo systemctl start sentinel (Ensure SENTINEL_JOIN_TOKEN is set)"
 echo "    Status: systemctl status sentinel.service"
 echo "    Logs:   journalctl -u sentinel.service -f"

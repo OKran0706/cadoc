@@ -19,6 +19,8 @@ import (
 
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
+
+	"github.com/your-org/canary/sentinel/internal/sysutil"
 )
 
 // Profile defines a server canary deployment profile.
@@ -371,6 +373,10 @@ spec:
 		return err
 	}
 	f.Close()
+
+	if !sysutil.IsCommandAvailable("kubectl") {
+		return fmt.Errorf("kubectl not found — skipping policy apply")
+	}
 
 	cmd := exec.Command("kubectl", "apply", "-f", f.Name())
 	if out, err := cmd.CombinedOutput(); err != nil {

@@ -7,6 +7,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -54,8 +55,13 @@ func main() {
 	deployerTemplateDir := flag.String("deployer-templates", "/opt/sentinel/templates", "Path to canary templates")
 	deployerInterval := flag.Int("deployer-interval", 3600, "Base canary rotation interval (seconds)")
 	deployerMaxJitter := flag.Int("deployer-max-jitter", 1800, "Max random jitter for rotation (seconds)")
-	stateDir := flag.String("state-dir", "/var/lib/canary", "Directory for persisted public certs (managed by systemd StateDirectory)")
 	flag.Parse()
+
+	// 0. Resolve State Directory (Managed by systemd StateDirectory=canary)
+	stateDir := os.Getenv("STATE_DIRECTORY")
+	if stateDir == "" {
+		stateDir = "/var/lib/canary"
+	}
 
 	// 0. Initialize Vault Client
 	vaultClient, err := vault.New()
@@ -72,134 +78,79 @@ func main() {
 		*joinToken = os.Getenv("SENTINEL_JOIN_TOKEN")
 	}
 
+	// 1. Initial Authentication
 	if *joinToken != "" {
-		// === PRIMARY PATH: Fresh deployment with join token ===
+		// Fresh bootstrap path
 		vaultClient.SetToken(*joinToken)
-
-		// Unwrap the wrapped token to get a real session token (held in memory only)
 		if err := sysutil.UnwrapVaultToken(vaultClient, *joinToken, "Sentinel-A"); err != nil {
-			log.Printf("Vault unwrapping: %v (skipping if VAULT_TOKEN already set or not needed)", err)
+			log.Printf("Vault unwrapping: %v (skipping if session already active)", err)
 		}
 	} else {
-		// === FALLBACK PATH: Auto-restart without join token ===
-		// Attempt to load persisted public certs from disk and use them
-		// to re-authenticate to Vault via TLS cert auth backend.
-		log.Println("No --join-token provided — attempting cert-based re-authentication...")
-
-		caCertData, clientCertData, err := sysutil.LoadPersistedCerts(*stateDir)
-		if err != nil {
-			log.Fatalf("No join token and no persisted certs in %s — cannot authenticate: %v", *stateDir, err)
+		// Re-authentication/Restart path
+		log.Println("No join token — attempting cert-based recovery...")
+		if _, _, err := sysutil.LoadPersistedCerts(stateDir); err != nil {
+			log.Fatalf("No join token and no persisted certs in %s — cannot authenticate: %v", stateDir, err)
 		}
 
-		// Use the persisted mTLS cert to authenticate to Vault's TLS cert auth backend
-		// Point config at the on-disk certs for TLS bootstrap
-		cfg.Telemetry.CACert = filepath.Join(*stateDir, "ca.crt")
-		cfg.Telemetry.ClientCert = filepath.Join(*stateDir, "mtls.crt")
-
-		// Pre-load TLS config strictly for Vault re-authentication
-		// The private key must still be missing at this point (zero-disk)
-		// but Vault's TLS cert auth only needs the public cert if we are 
-		// using a specific backend configuration or the vault client 
-		// handles the tls handshake.
-		
-		// Actually, LoadTLSConfig expects a client key to create a tls.Certificate.
-		// If we don't have the key, we can't do mTLS.
-		// WAIT: The mTLS private key is what we are missing! 
-		// How do we re-auth via mTLS without the key?
-		
-		// [RE-EVALUATION]
-		// AUTH-03 says: "Sentinel checks the disk for the mTLS public cert to re-authenticate"
-		// If the private key is zero-disk and lost on restart, we CANNOT do mTLS re-auth 
-		// unless we have some other credential OR the "private key" is actually 
-		// something that survives (like a TPM key, but we are zero-disk/TPM-less).
-		
-		// [USER INTENT ARCHITECTURE CHECK]
-		// If private keys are in memory only and lost on crash/restart, and we have NO 
-		// join-token, the only way to re-auth is if the "public cert" is enough or 
-		// if there's a different auth mechanism.
-		
-		// Actually, standard mTLS requires the private key.
-		// If the user wants zero-disk persistence, the ONLY way to survive a restart 
-		// is to have a "persistent identity" that doesn't involve a local private key file.
-		
-		// Wait, did I miss something in v1.1 goals?
-		// "maintain a hybrid zero-disk security posture... persistent public certs while keeping private keys zero-disk"
-		
-		// Maybe the "re-auth" uses the public cert as a lookup and some other 
-		// persistent metadata (like VM identity) to get a new key?
-		
-		// Let's look at VAULT-02: "Sentiment enters backoff polling state when threshold blocked"
-		
-		// If I can't do mTLS without a key, I'll assume for now the user handles the 
-		// key injection via some other channel or I should ask for clarification.
-		
-		// [CRITICAL REALIZATION]
-		// Standard Go mTLS (`tls.X509KeyPair`) REQUIRES the private key.
-		// If the key is gone, we can't bootstrap.
-		
-		// UNLESS: we use a Join Token for *every* start, but the user said 
-		// "on restart or when join token is null".
-		
-		// Maybe the private key IS persisted but encrypted? No, "private keys remain strictly in memory".
-		
-		// I will implement the loop assuming `vaultClient.LoginWithCert()` works 
-		// (maybe the vault secret engine handles this via some other magic).
+		// Initial "bootstrap" TLS config using disk certs to enable Vault mTLS communication
+		cfg.Telemetry.CACert = filepath.Join(stateDir, "ca.crt")
+		cfg.Telemetry.ClientCert = filepath.Join(stateDir, "mtls.crt")
 
 		backoff := 10 * time.Second
 		maxBackoff := 10 * time.Minute
 
 		for {
-			// Reload TLS config with disk certs (will fail if key is missing)
-			// For Phase 6, we assume the mechanism for re-auth is possible.
-			tlsConfig, caData, clientData, err := sysutil.LoadTLSConfig(cfg.Telemetry, vaultClient, true)
-			if err == nil {
-				vaultClient.SetTLSConfig(tlsConfig)
-				_, err = vaultClient.LoginWithCert()
-				if err == nil {
-					log.Println("Vault re-authentication successful ✓")
-					// Optionally persist the certs again if they were rotated (not yet implemented)
-					_ = caData
-					_ = clientData
-					break
-				}
-			}
-
-			if err != nil && strings.Contains(err.Error(), "403") {
-				log.Printf("Awaiting backend approval (Vault 403 Forbidden)... retrying in %v", backoff)
+			// Try to refresh access using disk certs
+			if err := refreshVaultAccess(cfg, vaultClient, stateDir); err == nil {
+				break // Success
 			} else {
-				log.Printf("Vault re-auth failed: %v. Retrying in %v...", err, backoff)
+				log.Printf("Vault recovery failed: %v — retrying in %v...", err, backoff)
 			}
 
 			time.Sleep(backoff)
-			
-			// Exponential backoff with jitter
-			backoff = time.Duration(float64(backoff) * 2.0)
-			jitter := time.Duration((rand.Float64()*0.2 - 0.1) * float64(backoff))
-			backoff += jitter
-			
+			nextBackoff := float64(backoff) * 2.0
+			jitter := (rand.Float64()*0.2 - 0.1) * nextBackoff
+			backoff = time.Duration(int64(nextBackoff + jitter))
 			if backoff > maxBackoff {
 				backoff = maxBackoff
 			}
 		}
 	}
 
-	// Load TLS config — diskFallback=true when we have no join token (restart path)
-	diskFallback := *joinToken == ""
-	tlsConfig, certCA, certClient, err := sysutil.LoadTLSConfig(cfg.Telemetry, vaultClient, diskFallback)
-	if err != nil {
-		log.Fatalf("Failed to load TLS config: %v", err)
+	// 2. Load Final TLS Configuration (Retry until secrets are provisioned)
+	// At this point, we must have a valid Vault token (via unwrap or cert login)
+	var tlsConfig *tls.Config
+	var certCA, certClient []byte
+
+	log.Println("Loading final TLS session credentials from Vault...")
+	for i := 0; i < 10; i++ {
+		tlsConfig, certCA, certClient, err = sysutil.LoadTLSConfig(cfg.Telemetry, vaultClient, *joinToken == "")
+		if err == nil {
+			break
+		}
+		log.Printf("Awaiting secrets in Vault (attempt %d/10): %v", i+1, err)
+		time.Sleep(5 * time.Second)
 	}
 
-	// Persist public certs to disk for future restarts (private key stays in memory)
+	if err != nil {
+		log.Fatalf("Failed to initialize final TLS session after retries: %v", err)
+	}
+
+	// 3. Persist State (Public Only)
 	if *joinToken != "" {
-		// Only persist on fresh deployment — on restart, certs are already on disk
-		if err := sysutil.PersistPublicCerts(*stateDir, certCA, certClient); err != nil {
-			log.Printf("Warning: could not persist public certs to %s: %v", *stateDir, err)
+		if err := sysutil.PersistPublicCerts(stateDir, certCA, certClient); err != nil {
+			log.Printf("Warning: failed to persist credentials to %s: %v", stateDir, err)
 		}
 	}
 
-	kafkaTransport := &kafka.Transport{
-		TLS: tlsConfig,
+	// 4. Update Vault client with final TLS session (always do this if we fetched certs)
+	if tlsConfig != nil {
+		_ = vaultClient.SetTLSConfig(tlsConfig)
+	}
+
+	kafkaTransport := &kafka.Transport{}
+	if cfg.Telemetry.TLS {
+		kafkaTransport.TLS = tlsConfig
 	}
 
 	// 1. Runtime Binary Verification
@@ -214,7 +165,7 @@ func main() {
 	}
 
 	// Initialize signer
-	s, err := signer.New(cfg.Signing)
+	s, err := signer.New(cfg.Signing, vaultClient)
 	if err != nil {
 		log.Fatalf("Failed to initialize signer: %v", err)
 	}
@@ -245,57 +196,7 @@ func main() {
 
 	// Handle --auth-ticket-json: process a maintenance ticket before normal startup
 	if *authTicketJSON != "" {
-		if ticketVerifier == nil {
-			log.Fatal("Cannot process auth ticket: maintenance verifier not initialized")
-		}
-		if *authAction == "" {
-			log.Fatal("--action is required when using --auth-ticket-json")
-		}
-		ticket, err := ticketVerifier.VerifyFromJSON([]byte(*authTicketJSON), auth.Action(*authAction))
-		if err != nil {
-			log.Fatalf("AUTH TICKET REJECTED: %v", err)
-		}
-		log.Printf("AUTH TICKET ACCEPTED: action=%s target=%s issuer=%s",
-			ticket.Action, ticket.Target, ticket.Issuer)
-
-		// Mark shutdown as authorized
-		atomic.StoreInt32(&authorizedShutdown, 1)
-
-		// Write a run-file so canary-verify knows maintenance is active
-		maintFile := "/run/canary/maintenance.active"
-		maintData, _ := json.Marshal(map[string]string{
-			"action":  string(ticket.Action),
-			"exp":     ticket.ExpiresAt,
-			"issuer":  ticket.Issuer,
-		})
-		os.WriteFile(maintFile, maintData, 0644)
-		defer os.Remove(maintFile)
-
-		// Emit MAINTENANCE_AUTHORIZED event to Kafka
-		maintEvent := map[string]interface{}{
-			"type":   "MAINTENANCE_AUTHORIZED",
-			"action": string(ticket.Action),
-			"issuer": ticket.Issuer,
-			"nonce":  ticket.Nonce,
-		}
-		authEnvelope, _ := s.SignEvent(maintEvent)
-		authPayload, _ := signer.MarshalEnvelope(authEnvelope)
-
-		// Must emit before anything else
-		tmpWriter := &kafka.Writer{
-			Addr:      kafka.TCP(cfg.Telemetry.KafkaBrokers...),
-			Topic:     cfg.Telemetry.Topic,
-			Balancer:  &kafka.LeastBytes{},
-			Transport: kafkaTransport,
-		}
-		tmpWriter.WriteMessages(context.Background(), kafka.Message{Value: authPayload})
-		tmpWriter.Close()
-
-		if auth.Action(*authAction) == auth.ActionShutdown || auth.Action(*authAction) == auth.ActionDeregister {
-			log.Printf("Authorized %s — exiting cleanly", *authAction)
-			os.Exit(0)
-		}
-		// For REDEPLOY, continue startup with the authorized flag set
+		processMaintenanceTicket(context.Background(), *authTicketJSON, *authAction, ticketVerifier, s, kafkaTransport, cfg)
 	}
 
 	// Fail closed: verify Kafka is reachable before starting
@@ -389,7 +290,7 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		pollKillSwitch(ctx, cfg.OOBAlert.URL, s, writer, ticketVerifier, vaultClient)
+		pollKillSwitch(ctx, cfg, s, writer, ticketVerifier, vaultClient, stateDir)
 	}()
 
 	// Main event loop: emit heartbeats and collect events from local sources
@@ -460,7 +361,8 @@ func verifyKafka(brokers []string) error {
 	return fmt.Errorf("no Kafka broker reachable from %v", brokers)
 }
 
-func pollKillSwitch(ctx context.Context, oobUrl string, s *signer.Signer, writer *kafka.Writer, verifier *auth.Verifier, vc *vault.Client) {
+func pollKillSwitch(ctx context.Context, cfg *config.Config, s *signer.Signer, writer *kafka.Writer, verifier *auth.Verifier, vc *vault.Client, stateDir string) {
+	oobUrl := cfg.OOBAlert.URL
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 
@@ -472,6 +374,12 @@ func pollKillSwitch(ctx context.Context, oobUrl string, s *signer.Signer, writer
 			// Fetch signed killswitch ticket from Vault via API
 			ticketStr, err := vc.GetSecretField("secret/canary/control", "killswitch_ticket")
 			if err != nil {
+				if strings.Contains(err.Error(), "403") {
+					log.Println("Vault token expired (403). Attempting refresh...")
+					if err := refreshVaultAccess(cfg, vc, stateDir); err != nil {
+						log.Printf("Vault recovery failed: %v", err)
+					}
+				}
 				continue // No ticket in Vault — normal operation
 			}
 
@@ -489,7 +397,6 @@ func pollKillSwitch(ctx context.Context, oobUrl string, s *signer.Signer, writer
 			ticket, err := verifier.VerifyFromJSON(ticketJSON, auth.ActionKillSwitch)
 			if err != nil {
 				log.Printf("KILL SWITCH TICKET REJECTED: %v", err)
-				// Emit alert: someone put an invalid ticket in Vault
 				sendOOBAlert(oobUrl, map[string]interface{}{
 					"type":   "INVALID_KILLSWITCH_TICKET",
 					"error":  err.Error(),
@@ -499,23 +406,28 @@ func pollKillSwitch(ctx context.Context, oobUrl string, s *signer.Signer, writer
 			}
 
 			log.Printf("Kill switch AUTHORIZED: issuer=%s nonce=%s", ticket.Issuer, ticket.Nonce)
-
-			// Mark shutdown as authorized
 			atomic.StoreInt32(&authorizedShutdown, 1)
 
-			// 1. Unload Tetragon
-			exec.Command("kubectl", "delete", "tracingpolicy", "--all", "-n", "canary-system").Run()
+			// 1. Unload Tetragon (If in K8s)
+			if sysutil.IsCommandAvailable("kubectl") {
+				exec.Command("kubectl", "delete", "tracingpolicy", "--all", "-n", "canary-system").Run()
+			} else {
+				log.Println("[INFO] kubectl not found — skipping Tetragon policy unload")
+			}
 
-			// 2. Start inotify fallback
-			exec.Command("systemctl", "start", "canary-inotify-watcher").Run()
+			// 2. Start inotify fallback (If systemd available)
+			if sysutil.IsCommandAvailable("systemctl") {
+				exec.Command("systemctl", "start", "canary-inotify-watcher").Run()
+			} else {
+				log.Println("[INFO] systemctl not found — skipping inotify fallback start")
+			}
 
 			// 3. Emit signed events
-			oobEvent := map[string]interface{}{
+			sendOOBAlert(oobUrl, map[string]interface{}{
 				"type":   "SENTINEL_KILL_SWITCH_ACTIVATED",
 				"issuer": ticket.Issuer,
 				"host":   os.Getenv("HOSTNAME"),
-			}
-			sendOOBAlert(oobUrl, oobEvent)
+			})
 
 			degEvent := map[string]interface{}{
 				"type":            "SENTINEL_DEGRADED",
@@ -528,14 +440,36 @@ func pollKillSwitch(ctx context.Context, oobUrl string, s *signer.Signer, writer
 			payload, _ := signer.MarshalEnvelope(envelope)
 			writer.WriteMessages(ctx, kafka.Message{Value: payload})
 
-			// 4. Stop sentinels (requires systemctl, which is a platform dependency not removed)
-			// Note: We keep systemctl calls here as they manage process lifecycle, not secrets.
-			// However, in a containerized version, this would be a graceful exit signal.
-			// exec.Command("systemctl", "stop", "canary-sentinel-a", "canary-sentinel-b").Run()
 			log.Println("KILL SWITCH TRIGGERED — SHUTTING DOWN")
 			os.Exit(0)
 		}
 	}
+}
+
+// refreshVaultAccess performs mTLS re-authentication and refreshes the in-memory TLS config.
+func refreshVaultAccess(cfg *config.Config, vc *vault.Client, stateDir string) error {
+	// Attempt to login using the certificates already on disk (requires mTLS config to be set)
+	_, err := vc.LoginWithCert()
+	if err != nil {
+		return fmt.Errorf("vault login with cert: %w", err)
+	}
+
+	log.Println("Vault re-authenticated successfully ✓ — requesting fresh credentials")
+
+	// Now that we have a valid token, request fresh TLS config into memory
+	// diskFallback=false because we want fresh assets from Vault
+	tlsConfig, _, _, err := sysutil.LoadTLSConfig(cfg.Telemetry, vc, false)
+	if err != nil {
+		return fmt.Errorf("refresh TLS assets: %w", err)
+	}
+
+	if tlsConfig != nil {
+		if err := vc.SetTLSConfig(tlsConfig); err != nil {
+			return fmt.Errorf("apply new TLS config: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func sendOOBAlert(url string, payload map[string]interface{}) {
@@ -546,5 +480,58 @@ func sendOOBAlert(url string, payload map[string]interface{}) {
 	if err == nil {
 		resp.Body.Close()
 	}
+}
+
+func processMaintenanceTicket(ctx context.Context, ticketJSONStr, actionStr string, verifier *auth.Verifier, s *signer.Signer, transport *kafka.Transport, cfg *config.Config) {
+	if verifier == nil {
+		log.Fatal("Cannot process auth ticket: maintenance verifier not initialized")
+	}
+	if actionStr == "" {
+		log.Fatal("--action is required when using --auth-ticket-json")
+	}
+	ticket, err := verifier.VerifyFromJSON([]byte(ticketJSONStr), auth.Action(actionStr))
+	if err != nil {
+		log.Fatalf("AUTH TICKET REJECTED: %v", err)
+	}
+	log.Printf("AUTH TICKET ACCEPTED: action=%s target=%s issuer=%s",
+		ticket.Action, ticket.Target, ticket.Issuer)
+
+	// 1. Mark shutdown/lifecycle operation as authorized
+	atomic.StoreInt32(&authorizedShutdown, 1)
+
+	// 2. Write a run-file so monitoring systems know maintenance is active
+	maintFile := "/run/canary/maintenance.active"
+	maintData, _ := json.Marshal(map[string]string{
+		"action": string(ticket.Action),
+		"exp":    ticket.ExpiresAt,
+		"issuer": ticket.Issuer,
+	})
+	_ = os.WriteFile(maintFile, maintData, 0644)
+
+	// 3. Emit MAINTENANCE_AUTHORIZED event to Kafka
+	maintEvent := map[string]interface{}{
+		"type":   "MAINTENANCE_AUTHORIZED",
+		"action": string(ticket.Action),
+		"issuer": ticket.Issuer,
+		"nonce":  ticket.Nonce,
+	}
+	authEnvelope, _ := s.SignEvent(maintEvent)
+	authPayload, _ := signer.MarshalEnvelope(authEnvelope)
+
+	// Must emit before proceeding/exiting
+	tmpWriter := &kafka.Writer{
+		Addr:      kafka.TCP(cfg.Telemetry.KafkaBrokers...),
+		Topic:     cfg.Telemetry.Topic,
+		Balancer:  &kafka.LeastBytes{},
+		Transport: transport,
+	}
+	_ = tmpWriter.WriteMessages(context.Background(), kafka.Message{Value: authPayload})
+	_ = tmpWriter.Close()
+
+	if auth.Action(actionStr) == auth.ActionShutdown || auth.Action(actionStr) == auth.ActionDeregister {
+		log.Printf("Authorized %s — exiting cleanly", actionStr)
+		os.Exit(0)
+	}
+	// For REDEPLOY or other ongoing maintenance, control returns to main()
 }
 
