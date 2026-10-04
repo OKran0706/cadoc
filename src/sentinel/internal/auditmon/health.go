@@ -6,7 +6,6 @@ package auditmon
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 )
 

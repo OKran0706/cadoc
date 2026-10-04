@@ -6,16 +6,12 @@
 package selfmon
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log"
-	"net"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
-	"text/template"
 	"time"
 
 	"github.com/your-org/canary/sentinel/internal/ingestclient"
