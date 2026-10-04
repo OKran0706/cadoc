@@ -59,12 +59,14 @@ type Aggregator struct {
 	maxBuffers   int
 	emitChan     chan *AuditEvent
 	stopChan     chan struct{}
+	canaryMap    map[string]bool // Thread-safe set of paths to monitor
 }
 
 // NewAggregator creates a new stateful audit aggregator.
 func NewAggregator(timeout time.Duration, maxBuffers int) *Aggregator {
 	a := &Aggregator{
 		buffers:    make(map[string]*eventBuffer),
+		canaryMap:  make(map[string]bool),
 		timeout:    timeout,
 		maxBuffers: maxBuffers,
 		emitChan:   make(chan *AuditEvent, 1000),
@@ -72,6 +74,17 @@ func NewAggregator(timeout time.Duration, maxBuffers int) *Aggregator {
 	}
 	go a.janitor()
 	return a
+}
+
+// SetWatchPaths updates the in-memory registry of paths to monitor.
+func (a *Aggregator) SetWatchPaths(paths []string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.canaryMap = make(map[string]bool)
+	for _, p := range paths {
+		a.canaryMap[p] = true
+	}
+	log.Printf("[auditmon] Canary Map updated: %d paths", len(paths))
 }
 
 // ProcessRecord ingests a single raw record and attempts to complete an event.
@@ -140,7 +153,16 @@ func (a *Aggregator) isComplete(buf *eventBuffer) bool {
 		return false
 	}
 	// We require at least the syscall record + one path record for canary monitoring
-	return len(buf.paths) > 0
+	if len(buf.paths) == 0 {
+		return false
+	}
+
+	// 13.2.3: Worker-side filtering
+	// Check if the path is in our Canary Map
+	path := extractString(buf.paths[0], "name")
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.canaryMap[path]
 }
 
 func (a *Aggregator) emit(key string) {

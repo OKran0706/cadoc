@@ -10,6 +10,12 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
+)
+
+var (
+	workersMu sync.Mutex
+	workers   = make(map[net.Conn]bool)
 )
 
 // StartServer listens on a Unix socket for events forwarded by the audit consumer plugin.
@@ -41,12 +47,31 @@ func StartServer(ctx context.Context, socketPath string, handler func(event *Aud
 					continue
 				}
 			}
+			workersMu.Lock()
+			workers[conn] = true
+			workersMu.Unlock()
 			go handleConnection(ctx, conn, handler)
 		}
 	}()
 
 	<-ctx.Done()
 	return nil
+}
+
+// BroadcastControlMessage sends a control command to all connected workers.
+func BroadcastControlMessage(msg string) {
+	workersMu.Lock()
+	defer workersMu.Unlock()
+	
+	payload := []byte(msg + "\n")
+	for conn := range workers {
+		_, err := conn.Write(payload)
+		if err != nil {
+			log.Printf("[auditmon] Failed to send control message to worker: %v", err)
+			conn.Close()
+			delete(workers, conn)
+		}
+	}
 }
 
 func handleConnection(ctx context.Context, conn net.Conn, handler func(event *AuditEvent)) {

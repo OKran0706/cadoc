@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/elastic/go-libaudit/auparse"
@@ -23,51 +24,79 @@ func runAuditConsumer() {
 	// 1. Initialize Aggregator with 2s timeout and 10k buffer
 	agg := auditmon.NewAggregator(2*time.Second, 10000)
 
-	// 2. Dial the main Sentinel process
-	// We use a Unix socket for low-latency IPC.
-	// The main process will listen on /run/canary/audit.sock
-	var conn net.Conn
-	var err error
-	for i := 0; i < 10; i++ {
-		conn, err = net.Dial("unix", "/run/canary/audit.sock")
-		if err == nil {
-			break
-		}
-		time.Sleep(1 * time.Second)
-	}
-	if err != nil {
-		log.Fatalf("[audit-consume] Failed to connect to main sentinel: %v", err)
-	}
-	defer conn.Close()
-
-	// 3. Consume from Aggregator and forward to main process
+	// 2. Start Stdin consumer in background
 	go func() {
-		for event := range agg.Events() {
-			// In a real implementation, we would binary-encode or JSON-encode here.
-			// For this phase, we'll send a simple ping-back or forward the ID.
-			fmt.Fprintf(conn, "EVENT %s %s %d %s\n", event.ID, event.Confidence, event.PID, event.Path)
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line == "" {
+				continue
+			}
+			rec, err := auparse.Parse(0, line)
+			if err != nil {
+				continue
+			}
+			agg.ProcessRecord(rec)
 		}
 	}()
 
-	// 4. Read from Stdin (audispd pipe)
-	scanner := bufio.NewScanner(os.Stdin)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
+	// 3. Connect to main process with exponential backoff
+	backoff := 1 * time.Second
+	maxBackoff := 60 * time.Second
 
-		// 11.03: Use the correct Parse signature. Passing 0 as the type 
-		// allows the parser to extract the actual type (SYSCALL, PATH, etc.)
-		// directly from the type= prefix in the audit line.
-		rec, err := auparse.Parse(0, line)
+	for {
+		log.Printf("[audit-consume] Attempting to connect to sentinel at /run/canary/audit.sock...")
+		conn, err := net.Dial("unix", "/run/canary/audit.sock")
 		if err != nil {
+			log.Printf("[audit-consume] Connection failed: %v. Retrying in %v...", err, backoff)
+			time.Sleep(backoff)
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
 			continue
 		}
-		agg.ProcessRecord(rec)
-	}
 
-	if err := scanner.Err(); err != nil {
-		log.Fatalf("[audit-consume] Stdin error: %v", err)
+		log.Println("[audit-consume] Connected to sentinel ✓")
+		backoff = 1 * time.Second // Reset backoff on success
+
+		handleSentinelConn(conn, agg)
 	}
+}
+
+func handleSentinelConn(conn net.Conn, agg *auditmon.Aggregator) {
+	defer conn.Close()
+	errChan := make(chan error, 1)
+
+	// A. Forward events to Sentinel
+	go func() {
+		for event := range agg.Events() {
+			_, err := fmt.Fprintf(conn, "EVENT %s %s %d %s\n", event.ID, event.Confidence, event.PID, event.Path)
+			if err != nil {
+				errChan <- err
+				return
+			}
+		}
+	}()
+
+	// B. Receive control messages from Sentinel (e.g. SET_MAP)
+	go func() {
+		scanner := bufio.NewScanner(conn)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "SET_MAP ") {
+				paths := strings.Split(line[8:], ",")
+				agg.SetWatchPaths(paths)
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			errChan <- err
+		} else {
+			errChan <- fmt.Errorf("sentinel closed connection")
+		}
+	}()
+
+	// Wait for any error
+	err := <-errChan
+	log.Printf("[audit-consume] IPC Error: %v. Reconnecting...", err)
 }
