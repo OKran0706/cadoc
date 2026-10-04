@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -53,11 +54,14 @@ func New(cfg config.SigningConfig, vc *vault.Client) (*Signer, error) {
 			return nil, fmt.Errorf("decode vault key (hex expected): %w", err)
 		}
 		
-		if len(keyBytes) != ed25519.PrivateKeySize {
-			return nil, fmt.Errorf("invalid ed25519 private key size: got %d, want %d", len(keyBytes), ed25519.PrivateKeySize)
+		log.Printf("[DEBUG] Signer loading key of size %d", len(keyBytes))
+		if len(keyBytes) == ed25519.SeedSize {
+			privKey = ed25519.NewKeyFromSeed(keyBytes)
+		} else if len(keyBytes) == ed25519.PrivateKeySize {
+			privKey = ed25519.PrivateKey(keyBytes)
+		} else {
+			return nil, fmt.Errorf("invalid ed25519 private key size: got %d, want 32 (seed) or 64 (full key)", len(keyBytes))
 		}
-		
-		privKey = ed25519.PrivateKey(keyBytes)
 		pub := privKey.Public().(ed25519.PublicKey)
 		hash := sha256.Sum256(pub)
 		pubKeyFP = hex.EncodeToString(hash[:8])

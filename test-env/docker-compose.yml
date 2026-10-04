@@ -10,14 +10,14 @@ services:
       apk add --no-cache openssl &&
       echo 'Generating CA...' &&
       openssl req -new -x509 -keyout ca.key -out ca.crt -days 365 -nodes -subj '/CN=Canary CA' &&
-      echo 'Generating Server (Kafka) Certs...' &&
-      openssl req -newkey rsa:2048 -nodes -keyout kafka.key -out kafka.csr -subj '/CN=localhost' &&
-      openssl x509 -req -in kafka.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out kafka.crt -days 365 &&
+      echo 'Generating Server (LB) Certs with SANs...' &&
+      openssl req -new -newkey rsa:2048 -nodes -keyout server.key -out server.csr -subj '/CN=canary-ingestion-lb' -addext 'subjectAltName = DNS:canary-ingestion-lb, DNS:localhost, IP:127.0.0.1' &&
+      openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt -days 365 -copy_extensions copyall &&
       echo 'Generating Client (Sentinel) Certs...' &&
-      openssl req -newkey rsa:2048 -nodes -keyout client.key -out client.csr -subj '/CN=sentinel-client' &&
+      openssl req -new -newkey rsa:2048 -nodes -keyout client.key -out client.csr -subj '/CN=sentinel-client' &&
       openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out client.crt -days 365 &&
-      echo 'Formatting for Bitnami Kafka (PEM)...' &&
-      cat kafka.crt kafka.key > kafka.keystore.pem &&
+      cat server.crt server.key > kafka.keystore.pem &&
+      cp server.crt kafka.crt && cp server.key kafka.key &&
       cp ca.crt kafka.truststore.pem && chmod -R 777 /certs &&
       echo 'Certificates successfully generated!'
       "
@@ -72,6 +72,7 @@ services:
   vault-init:
     image: hashicorp/vault:latest
     container_name: canary-vault-init
+    user: root
     depends_on:
       cert-generator:
         condition: service_completed_successfully
@@ -82,61 +83,65 @@ services:
       - VAULT_TOKEN=root
     volumes:
       - ./certs:/certs
-    entrypoint: >
-      sh -c "
-      set -e;
-      export VAULT_TOKEN=root;
-      export VAULT_ADDR=http://vault:8200;
-      echo 'Waiting for vault API...';
-      while ! vault status > /dev/null 2>&1; do sleep 1; done;
-      
-      echo 'Writing generated certificates into Vault KV...';
-      vault kv put secret/canary/kafka ca_cert=@/certs/ca.crt client_cert=@/certs/kafka.crt client_key=@/certs/kafka.key;
-      echo 'Kafka certs written to Vault.';
-      
-      echo 'Generating Identity test signing key...';
-      vault kv put secret/canary/signer private_key=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef;
-      echo 'Identity signing key written to Vault.';
-      
-      echo 'Generating Authority test control key...';
-      vault kv put secret/canary/control auth_pubkey=0123456789abcdef0123456789abcdef;
-      echo 'Authority control key written to Vault.';
-      
-      echo 'Enabling cert auth in Vault...';
-      vault auth enable cert || echo 'Cert auth already enabled';
-      vault write auth/cert/certs/sentinel certificate=@/certs/ca.crt token_policies=default token_ttl=1h;
-      
-      echo 'Vault initialization complete!';
-      "
+      - ./vault-init.sh:/vault-init.sh
+    entrypoint: ["sh", "/vault-init.sh"]
 
   sentinel-a:
     build:
       context: ../src/sentinel
       dockerfile: Dockerfile
     container_name: canary-sentinel-a
-    privileged: true # Required for capability management in bounded kernels, ebpf graceful degradation
+    privileged: true 
     volumes:
       - ./config:/opt/sentinel/config
       - ./deployer-config:/opt/canary/config
       - deployer-output:/opt/canary/deployed
+      - ./certs:/certs:ro
+      - /sys/kernel/debug:/sys/kernel/debug
+      - /lib/modules:/lib/modules:ro
     depends_on:
       vault-init:
         condition: service_completed_successfully
-      kafka:
-        condition: service_healthy
+      ingestion-lb:
+        condition: service_started
     environment:
       - VAULT_ADDR=http://vault:8200
-      - VAULT_TOKEN=root
       - STATE_DIRECTORY=/tmp/canary
-    command: [
-      "--config", "/opt/sentinel/config/sentinel.yaml", 
-      "--join-token", "root",
-      "--deployer-profile", "app-server",
-      "--deployer-config", "/opt/canary/config",
-      "--deployer-templates", "/opt/sentinel/templates",
-      "--deployer-interval", "15",
-      "--deployer-max-jitter", "15"
-    ]
+    entrypoint: ["sh", "-c", "echo 'Waiting for join-token...'; while [ ! -f /certs/sentinel-a.token ]; do sleep 1; done; TOKEN=$$(cat /certs/sentinel-a.token); echo \"Token acquired. Starting sentinel-a...\"; exec /usr/local/bin/sentinel-a --config /opt/sentinel/config/sentinel.yaml --join-token $$TOKEN --deployer-profile app-server --deployer-config /opt/canary/config --deployer-templates /opt/sentinel/templates"]
+
+  redis:
+    image: redis:7-alpine
+    container_name: canary-redis
+    ports:
+      - "6379:6379"
+
+  ingestion-service:
+    build:
+      context: ../src/ingestion_service
+      dockerfile: Dockerfile
+    container_name: canary-ingestion-worker
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - KAFKA_BOOTSTRAP_SERVERS=canary-kafka:9092
+      - ORG_PUBLIC_KEY=89fe8e1d83bfcf0f50d7a649b1b407d2ed2690bbcd4c20ae8c2b48e66f45afd5
+    depends_on:
+      redis:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./certs:/certs:ro
+
+  ingestion-lb:
+    image: nginx:alpine
+    container_name: canary-ingestion-lb
+    depends_on:
+      - ingestion-service
+    volumes:
+      - ../deploy/nginx/ingestion-lb.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    ports:
+      - "8443:8443"
 
 volumes:
   deployer-output:

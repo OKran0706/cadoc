@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -192,12 +191,12 @@ func main() {
 
 	// Handle --auth-ticket-json: process a maintenance ticket before normal startup
 	if *authTicketJSON != "" {
-		processMaintenanceTicket(context.Background(), *authTicketJSON, *authAction, ticketVerifier, s, kafkaTransport, cfg)
+		processMaintenanceTicket(context.Background(), *authTicketJSON, *authAction, ticketVerifier, s, ic, cfg)
 	}
 
-	// Fail closed: verify Kafka is reachable before starting
-	if err := verifyKafka(cfg.Telemetry.KafkaBrokers); err != nil {
-		log.Fatalf("Kafka unreachable — failing closed: %v", err)
+	// Fail closed: verify Ingestion LB is reachable before starting
+	if err := verifyIngestion(cfg.Watchdog.IngestionURL, tlsConfig); err != nil {
+		log.Fatalf("Ingestion Service unreachable — failing closed: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -209,15 +208,6 @@ func main() {
 	if err := os.WriteFile("/run/canary/sentinel-a.pid", []byte(fmt.Sprintf("%d", os.Getpid())), 0644); err != nil {
 		log.Printf("Warning: could not write PID file: %v", err)
 	}
-
-	// Start Kafka writer
-	writer := &kafka.Writer{
-		Addr:      kafka.TCP(cfg.Telemetry.KafkaBrokers...),
-		Topic:     cfg.Telemetry.Topic,
-		Balancer:  &kafka.LeastBytes{},
-		Transport: kafkaTransport,
-	}
-	defer writer.Close()
 
 	// 2. Start eBPF self-monitor (applies Tetragon TracingPolicy)
 	// Must happen BEFORE capabilities are dropped (needs CAP_BPF, CAP_SYS_ADMIN)
@@ -256,7 +246,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			deployer_daemon.StartDaemon(ctx, *deployerProfile, *deployerConfigDir, *deployerTemplateDir, *deployerInterval, *deployerMaxJitter, s, writer)
+			deployer_daemon.StartDaemon(ctx, *deployerProfile, *deployerConfigDir, *deployerTemplateDir, *deployerInterval, *deployerMaxJitter, s, ic)
 		}()
 	}
 
@@ -350,16 +340,19 @@ func main() {
 	wg.Wait()
 }
 
-func verifyKafka(brokers []string) error {
-	for _, broker := range brokers {
-		conn, err := net.DialTimeout("tcp", broker, 5*time.Second)
-		if err != nil {
-			continue
-		}
-		conn.Close()
-		return nil
+func verifyIngestion(url string, tc *tls.Config) error {
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: tc,
+		},
 	}
-	return fmt.Errorf("no Kafka broker reachable from %v", brokers)
+	resp, err := client.Get(url) // Basic check (might return 405, but confirms connectivity)
+	if err != nil {
+		return fmt.Errorf("ingestion check: %w", err)
+	}
+	defer resp.Body.Close()
+	return nil
 }
 
 func pollKillSwitch(ctx context.Context, cfg *config.Config, s *signer.Signer, ic *ingestclient.Client, verifier *auth.Verifier, vc *vault.Client, stateDir string) {
