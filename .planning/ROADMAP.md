@@ -38,7 +38,7 @@
 
 - [x] Phase 11: Native Auditd Integration (libaudit)
 - [ ] Phase 12: Functional Container Verification
-- [ ] Phase 13: Remove eBPF Dependency (Transition to Auditd)
+- [x] Phase 13: Remove eBPF Dependency (Transition to Auditd)
 
 ## Progress
 
