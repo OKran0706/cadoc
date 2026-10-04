@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"strings"
 )
 
 // AuditctlManager manages live audit rules using the auditctl CLI.
@@ -51,12 +52,46 @@ func (m *AuditctlManager) ClearAll() error {
 	return nil
 }
 
-// CheckStatus returns the current auditd health status.
-func (m *AuditctlManager) CheckStatus() (string, error) {
+// HealthStatus represents the current state of auditd.
+type HealthStatus struct {
+	Enabled    bool
+	Failure    uint32
+	Pid        uint32
+	RateLimit  uint32
+	Backlog    uint32
+	Lost       uint32
+	BacklogLimit uint32
+}
+
+// CheckStatus returns the current auditd health status parsed from auditctl -s.
+func (m *AuditctlManager) CheckStatus() (*HealthStatus, error) {
 	cmd := exec.Command("auditctl", "-s")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("auditctl -s failed: %v", err)
 	}
-	return string(out), nil
+
+	status := &HealthStatus{}
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		parts := strings.Split(line, " ")
+		if len(parts) < 2 {
+			continue
+		}
+		
+		val := parts[1]
+		switch {
+		case strings.HasPrefix(line, "enabled"):
+			status.Enabled = val != "0"
+		case strings.HasPrefix(line, "pid"):
+			fmt.Sscanf(val, "%d", &status.Pid)
+		case strings.HasPrefix(line, "lost"):
+			fmt.Sscanf(val, "%d", &status.Lost)
+		case strings.HasPrefix(line, "backlog"):
+			fmt.Sscanf(val, "%d", &status.Backlog)
+		}
+	}
+
+	return status, nil
 }

@@ -234,6 +234,40 @@ func main() {
 
 	// 11.05: Start Auditmon IPC Server (If in Auditd mode)
 	if selfmon.DetectEnvironment() == selfmon.EnvAuditd {
+		auditMgr := auditmon.NewAuditctlManager("canary")
+		
+		// Start health monitor
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			auditmon.MonitorHealth(ctx, auditMgr, 30*time.Second, func(event auditmon.SubsystemEvent, details map[string]interface{}) {
+				log.Printf("[main] Auditd health event: %s", event)
+				
+				// Map to Kafka event type
+				eventType := "SENTINEL_AUDITD_HEALTH"
+				if event == auditmon.EventAuditdFailed {
+					eventType = "SENTINEL_AUDITD_FAILED"
+				} else if event == auditmon.EventAuditdRecovered {
+					eventType = "SENTINEL_AUDITD_RECOVERED"
+				}
+
+				healthMap := map[string]interface{}{
+					"type":  eventType,
+					"event": string(event),
+				}
+				for k, v := range details {
+					healthMap[k] = v
+				}
+
+				envelope, _ := s.SignEvent(healthMap)
+				payload, _ := signer.MarshalEnvelope(envelope)
+				if err := ic.Post(ctx, payload); err != nil {
+					log.Printf("[main] Failed to post health alert: %v", err)
+				}
+			})
+		}()
+
+		// Start IPC Server
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
