@@ -25,6 +25,7 @@ Last activity: 2026-04-21
 - Landmark v1.2 established a stable, unified test environment.
 - Post-deployment stabilization resolved critical Vault, mTLS, and cryptographic alignment issues.
 - Transitioning to v1.3 to address standalone deployment constraints (Native eBPF + FIM Fallback).
+- Phase 13 added: Remove all eBPF dependencies and transition to pure auditd-based monitoring.
 
 ## Deferred Items
 

@@ -1,0 +1,44 @@
+# test-env/Dockerfile.audit
+# Specialized test image for Native Auditd Monitoring (Isolated)
+
+FROM ubuntu:22.04
+
+# Avoid interactive prompts during apt-get
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 1. Install Auditd and Dispatcher dependencies
+RUN apt-get update && \
+    apt-get install -y auditd audispd-plugins ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# 2. Create Sentinel directory structure
+RUN mkdir -p /opt/sentinel/bin /opt/sentinel/config /etc/audisp/plugins.d /run/canary /opt/canary/deployed
+
+# 3. Copy binary and configuration
+# Note: sentinel-a was built with GOOS=linux GOARCH=amd64
+COPY src/sentinel/sentinel-a /opt/sentinel/bin/sentinel-a
+RUN chmod +x /opt/sentinel/bin/sentinel-a
+
+# 4. Copy local-signing test assets
+COPY test-env/config/sentinel-test.yaml /opt/sentinel/config/sentinel.yaml
+COPY test-env/config/signer.key /opt/sentinel/config/signer.key
+
+# 5. Copy audispd plugin config
+COPY test-env/config/audisp/sentinel.conf /etc/audisp/plugins.d/sentinel.conf
+
+# 6. Bootstrap Canary Audit Rules
+RUN echo "-w /opt/canary/deployed -p wa -k canary_tamper" > /etc/audit/rules.d/canary.rules
+
+# 7. Create a dummy canary file for testing
+RUN echo "canary_test_data" > /opt/canary/deployed/test.txt
+
+# 8. Start script: ensures auditd is running and then launches sentinel-a
+RUN echo '#!/bin/bash\n\
+service auditd start\n\
+echo "[*] Auditd started. Waiting for plugin activation..."\n\
+sleep 2\n\
+echo "[*] Launching main Sentinel-A daemon..."\n\
+/opt/sentinel/bin/sentinel-a --dev --config /opt/sentinel/config/sentinel.yaml\n\
+' > /start.sh && chmod +x /start.sh
+
+CMD ["/start.sh"]

@@ -34,10 +34,11 @@
 
 </details>
 
-### v1.3 Zero-Dependency Monitoring
+### v1.3 Native Auditd Monitoring
 
-- [ ] Phase 11: Failure Injection Testing
-- [ ] Phase 12: Zero-Dependency Active Monitoring (ebpf-go + FIM)
+- [x] Phase 11: Native Auditd Integration (libaudit)
+- [ ] Phase 12: Functional Container Verification
+- [ ] Phase 13: Remove eBPF Dependency (Transition to Auditd)
 
 ## Progress
 
@@ -48,5 +49,6 @@
 | 7     | v1.2      | 3/3            | Shipped | 2026-04-21 |
 | 11    | v1.3      | 0/1            | Planned | - |
 | 12    | v1.3      | 0/2            | Planned | - |
+| 13    | v1.3      | 0/1            | Planned | - |
 
 **Deferred:** Production-scale load testing acknowledged at v1.2 close.

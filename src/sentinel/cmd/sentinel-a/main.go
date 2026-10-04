@@ -12,12 +12,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math/rand"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,6 +30,7 @@ import (
 	"github.com/your-org/canary/sentinel/internal/signer"
 	"github.com/your-org/canary/sentinel/internal/sysutil"
 	"github.com/your-org/canary/sentinel/internal/vault"
+	"github.com/your-org/canary/sentinel/internal/auditmon" // 11.05: Added auditmon
 )
 
 // authorizedShutdown is set to 1 when a valid maintenance ticket has been processed.
@@ -39,7 +38,7 @@ import (
 var authorizedShutdown int32
 
 func main() {
-	log.Println("=== SENTINEL-A DAEMON BOOTING (MERGED VERSION) ===")
+	devMode := flag.Bool("dev", false, "Run in development mode (skips auth/ingestion bootstrap)")
 	configPath := flag.String("config", "/opt/sentinel/config/sentinel.yaml", "Path to sentinel config")
 	joinToken := flag.String("join-token", "", "Initial vault bootstrap token")
 	testSign := flag.Bool("test-sign", false, "Sign a test event and exit")
@@ -54,115 +53,121 @@ func main() {
 	deployerMaxJitter := flag.Int("deployer-max-jitter", 1800, "Max random jitter for rotation (seconds)")
 	flag.Parse()
 
-	// 0. Resolve State Directory (Managed by systemd StateDirectory=canary)
-	stateDir := os.Getenv("STATE_DIRECTORY")
-	if stateDir == "" {
-		stateDir = "/var/lib/canary"
+	// 0. Subcommand Check (audispd plugin mode)
+	if len(os.Args) >= 2 && os.Args[1] == "audit-consume" {
+		runAuditConsumer()
+		return
 	}
 
-	// 0. Initialize Vault Client
-	vaultClient, err := vault.New()
-	if err != nil {
-		log.Fatalf("Failed to initialize Vault client: %v", err)
-	}
+	log.Println("=== SENTINEL-A DAEMON BOOTING (MERGED VERSION) ===")
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	if *joinToken == "" {
-		*joinToken = os.Getenv("SENTINEL_JOIN_TOKEN")
+	// 0. Resolve State Directory (Managed by systemd StateDirectory=canary)
+	stateDir := os.Getenv("STATE_DIRECTORY")
+	if stateDir == "" {
+		stateDir = "/var/lib/canary"
 	}
 
-	// 1. Initial Authentication
-	if *joinToken != "" {
-		// Fresh bootstrap path
-		vaultClient.SetToken(*joinToken)
-		if err := sysutil.UnwrapVaultToken(vaultClient, *joinToken, "Sentinel-A"); err != nil {
-			log.Printf("Vault unwrapping: %v (skipping if session already active)", err)
-		}
-	} else {
-		// Re-authentication/Restart path
-		log.Println("No join token — attempting cert-based recovery...")
-		if _, _, err := sysutil.LoadPersistedCerts(stateDir); err != nil {
-			log.Fatalf("No join token and no persisted certs in %s — cannot authenticate: %v", stateDir, err)
-		}
-
-		// Initial "bootstrap" TLS config using disk certs to enable Vault mTLS communication
-		cfg.Telemetry.CACert = filepath.Join(stateDir, "ca.crt")
-		cfg.Telemetry.ClientCert = filepath.Join(stateDir, "mtls.crt")
-
-		backoff := 10 * time.Second
-		maxBackoff := 10 * time.Minute
-
-		for {
-			// Try to refresh access using disk certs
-			if err := refreshVaultAccess(cfg, vaultClient, stateDir); err == nil {
-				break // Success
-			} else {
-				log.Printf("Vault recovery failed: %v — retrying in %v...", err, backoff)
-			}
-
-			time.Sleep(backoff)
-			nextBackoff := float64(backoff) * 2.0
-			jitter := (rand.Float64()*0.2 - 0.1) * nextBackoff
-			backoff = time.Duration(int64(nextBackoff + jitter))
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
-		}
-	}
-
-	// 2. Load Final TLS Configuration (Retry until secrets are provisioned)
-	// At this point, we must have a valid Vault token (via unwrap or cert login)
+	// 1. Initialize Ingestion Client and Signer based on Mode
+	var ic *ingestclient.Client
+	var s *signer.Signer
+	var vaultClient *vault.Client
 	var tlsConfig *tls.Config
-	var certCA, certClient []byte
+	
+	ctx := context.Background()
 
-	log.Println("Loading final TLS session credentials from Vault...")
-	for i := 0; i < 10; i++ {
-		tlsConfig, certCA, certClient, err = sysutil.LoadTLSConfig(cfg.Telemetry, vaultClient, *joinToken == "")
-		if err == nil {
-			break
+	if *devMode {
+		log.Println("[DEV] Running in development mode - using local signing and mock ingest")
+		s, err = signer.New(cfg.Signing, nil)
+		if err != nil {
+			log.Fatalf("Signer init failed: %v", err)
 		}
-		log.Printf("Awaiting secrets in Vault (attempt %d/10): %v", i+1, err)
-		time.Sleep(5 * time.Second)
-	}
-
-	if err != nil {
-		log.Fatalf("Failed to initialize final TLS session after retries: %v", err)
-	}
-
-	// 3. Persist State (Public Only)
-	if *joinToken != "" {
-		if err := sysutil.PersistPublicCerts(stateDir, certCA, certClient); err != nil {
-			log.Printf("Warning: failed to persist credentials to %s: %v", stateDir, err)
+		// Mock ingest client (or local-only)
+		ic = ingestclient.New(cfg.Watchdog.IngestionURL, nil) 
+	} else {
+		// --- PRODUCTION BOOTSTRAP ---
+		// 1a. Resolve Vault Token
+		if *joinToken == "" {
+			*joinToken = os.Getenv("SENTINEL_JOIN_TOKEN")
 		}
-	}
 
-	// 4. Update Vault client with final TLS session (always do this if we fetched certs)
-	if tlsConfig != nil {
+		// 1b. Initialize Vault Client
+		vaultClient, err = vault.New()
+		if err != nil {
+			log.Fatalf("Failed to initialize Vault client: %v", err)
+		}
+
+		if *joinToken != "" {
+			// Fresh bootstrap path
+			vaultClient.SetToken(*joinToken)
+			if err := sysutil.UnwrapVaultToken(vaultClient, *joinToken, "Sentinel-A"); err != nil {
+				log.Printf("Vault unwrapping: %v (skipping if session already active)", err)
+			}
+		} else {
+			// Recovery path (No join token — attempting cert-based recovery)
+			if !auth.IsProvisioned() {
+				log.Println("No join token — attempting cert-based recovery...")
+				if err := auth.EnsureCertificates(ctx, cfg.Watchdog.IngestionURL); err != nil {
+					log.Fatalf("Authentication failure: %v", err)
+				}
+			}
+			
+			// Initial mTLS recovery
+			if _, _, err := sysutil.LoadPersistedCerts(stateDir); err != nil {
+				log.Fatalf("No certificates found in %s — cannot authenticate: %v", stateDir, err)
+			}
+		}
+
+		// 1c. Load Final TLS Configuration
+		var certCA, certClient []byte
+		log.Println("Loading final TLS session credentials from Vault...")
+		for i := 0; i < 10; i++ {
+			tlsConfig, certCA, certClient, err = sysutil.LoadTLSConfig(cfg.Telemetry, vaultClient, *joinToken == "")
+			if err == nil {
+				break
+			}
+			log.Printf("Awaiting secrets in Vault (attempt %d/10): %v", i+1, err)
+			time.Sleep(5 * time.Second)
+		}
+		if err != nil {
+			log.Fatalf("Failed to initialize final TLS session: %v", err)
+		}
+
+		// 1d. Persist State (Public Only)
+		if *joinToken != "" {
+			_ = sysutil.PersistPublicCerts(stateDir, certCA, certClient)
+		}
+
+		// 1e. Finalize Client Initialization
 		_ = vaultClient.SetTLSConfig(tlsConfig)
+		s, err = signer.New(cfg.Signing, vaultClient)
+		if err != nil {
+			log.Fatalf("Signer init failed: %v", err)
+		}
+
+		ic = ingestclient.New(cfg.Watchdog.IngestionURL, tlsConfig)
 	}
 
-	// 4. Initialize Ingestion Client
-	ic := ingestclient.New(cfg.Watchdog.IngestionURL, tlsConfig)
-
-	// 1. Runtime Binary Verification
-	if expected, actual, err := sysutil.VerifySelfIntegrity("sentinel-a"); err != nil {
-		sendOOBAlert(cfg.OOBAlert.URL, map[string]interface{}{
-			"type":   "BINARY_TAMPERED",
-			"binary": "sentinel-a",
-			"error":  fmt.Sprintf("expected %s got %s", expected, actual),
-			"host":   os.Getenv("HOSTNAME"),
-		})
-		log.Fatalf("Integrity verification failed: %v", err)
+	if *testSign && s != nil {
+		envelope, _ := s.SignEvent(map[string]interface{}{"test": "event"})
+		fmt.Printf("Signed test event: %s ✓\n", envelope["signature"])
+		os.Exit(0)
 	}
 
-	// Initialize signer
-	s, err := signer.New(cfg.Signing, vaultClient)
-	if err != nil {
-		log.Fatalf("Failed to initialize signer: %v", err)
+	// 2. Runtime Binary Verification (Skip in dev for speed)
+	if _, _, err := sysutil.VerifySelfIntegrity("sentinel-a"); err != nil {
+		if !*devMode {
+			sendOOBAlert(cfg.OOBAlert.URL, map[string]interface{}{
+				"type": "BINARY_TAMPERED",
+				"host": os.Getenv("HOSTNAME"),
+			})
+			log.Fatalf("Integrity verification failed: %v", err)
+		}
+		log.Printf("[DEV] Binary integrity warning (ignored in dev): %v", err)
 	}
 
 	if *testSign {
@@ -173,20 +178,24 @@ func main() {
 
 	// Initialize maintenance ticket verifier (fetch pubkey from Vault — held in memory only)
 	var ticketVerifier *auth.Verifier
-	log.Printf("Fetching maintenance pubkey from Vault: %s field=%s",
-		cfg.Maintenance.VaultPath, cfg.Maintenance.VaultField)
-	
-	pubKeyStr, err := vaultClient.GetSecretField(cfg.Maintenance.VaultPath, cfg.Maintenance.VaultField)
-	if err != nil {
-		log.Printf("Warning: failed to fetch maintenance pubkey from Vault: %v — ticket auth disabled", err)
-	} else {
-		tv, err := auth.NewVerifierFromBytes([]byte(pubKeyStr))
+	if !*devMode {
+		log.Printf("Fetching maintenance pubkey from Vault: %s field=%s",
+			cfg.Maintenance.VaultPath, cfg.Maintenance.VaultField)
+		
+		pubKeyStr, err := vaultClient.GetSecretField(cfg.Maintenance.VaultPath, cfg.Maintenance.VaultField)
 		if err != nil {
-			log.Printf("Warning: maintenance verifier init failed: %v", err)
+			log.Printf("Warning: failed to fetch maintenance pubkey from Vault: %v — ticket auth disabled", err)
 		} else {
-			ticketVerifier = tv
-			log.Printf("Maintenance ticket verifier initialized (key_id=%s, in-memory only)", tv.KeyID())
+			tv, err := auth.NewVerifierFromBytes([]byte(pubKeyStr))
+			if err != nil {
+				log.Printf("Warning: maintenance verifier init failed: %v", err)
+			} else {
+				ticketVerifier = tv
+				log.Printf("Maintenance ticket verifier initialized (key_id=%s, in-memory only)", tv.KeyID())
+			}
 		}
+	} else {
+		log.Println("[DEV] Skipping maintenance pubkey fetch (Vault disabled in dev)")
 	}
 
 	// Handle --auth-ticket-json: process a maintenance ticket before normal startup
@@ -194,9 +203,13 @@ func main() {
 		processMaintenanceTicket(context.Background(), *authTicketJSON, *authAction, ticketVerifier, s, ic, cfg)
 	}
 
-	// Fail closed: verify Ingestion LB is reachable before starting
-	if err := verifyIngestion(cfg.Watchdog.IngestionURL, tlsConfig); err != nil {
-		log.Fatalf("Ingestion Service unreachable — failing closed: %v", err)
+	// Fail closed: verify Ingestion LB is reachable before starting (Skip in dev)
+	if !*devMode {
+		if err := verifyIngestion(cfg.Watchdog.IngestionURL, tlsConfig); err != nil {
+			log.Fatalf("Ingestion Service unreachable — failing closed: %v", err)
+		}
+	} else {
+		log.Println("[DEV] Skipping ingestion reachability check")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -209,8 +222,7 @@ func main() {
 		log.Printf("Warning: could not write PID file: %v", err)
 	}
 
-	// 2. Start eBPF self-monitor (applies Tetragon TracingPolicy)
-	// Must happen BEFORE capabilities are dropped (needs CAP_BPF, CAP_SYS_ADMIN)
+	// 2. Start eBPF/Audit self-monitor
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -220,8 +232,30 @@ func main() {
 		}
 	}()
 
-	// Give Tetragon policy a moment to apply
-	time.Sleep(1 * time.Second)
+	// 11.05: Start Auditmon IPC Server (If in Auditd mode)
+	if selfmon.DetectEnvironment() == selfmon.EnvAuditd {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			auditmon.StartServer(ctx, "/run/canary/audit.sock", func(event *auditmon.AuditEvent) {
+				// Handler: Sign and ship the audit event
+				auditMap := map[string]interface{}{
+					"type":       "SENTINEL_FILE_TAMPER",
+					"audit_id":   event.ID,
+					"pid":        event.PID,
+					"path":       event.Path,
+					"confidence": string(event.Confidence),
+				}
+				envelope, _ := s.SignEvent(auditMap)
+				payload, _ := signer.MarshalEnvelope(envelope)
+				if err := ic.Post(ctx, payload); err != nil {
+					log.Printf("[auditmon] Failed to post tamper alert: %v", err)
+				}
+			})
+		}()
+	}
+
+	// drop capabilities after all initializations
 
 	// 3. Drop capabilities
 	if err := sysutil.DropCapabilitiesAfterInit(); err != nil {
@@ -402,12 +436,6 @@ func pollKillSwitch(ctx context.Context, cfg *config.Config, s *signer.Signer, i
 			log.Printf("Kill switch AUTHORIZED: issuer=%s nonce=%s", ticket.Issuer, ticket.Nonce)
 			atomic.StoreInt32(&authorizedShutdown, 1)
 
-			// 1. Unload Tetragon (If in K8s)
-			if sysutil.IsCommandAvailable("kubectl") {
-				exec.Command("kubectl", "delete", "tracingpolicy", "--all", "-n", "canary-system").Run()
-			} else {
-				log.Println("[INFO] kubectl not found — skipping Tetragon policy unload")
-			}
 
 			// 2. Start inotify fallback (If systemd available)
 			if sysutil.IsCommandAvailable("systemctl") {

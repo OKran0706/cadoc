@@ -12,10 +12,10 @@ RestartSec=10
 
 # --- Capability Bounding ---
 # Run as root but drop all capabilities except those required for
-# eBPF telemetry (CAP_BPF, CAP_PERFMON, CAP_SYS_RESOURCE) and
+# eBPF telemetry (CAP_SYS_RESOURCE) and
 # network egress to Kafka (CAP_NET_ADMIN).
-CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_NET_ADMIN
-AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_SYS_RESOURCE CAP_NET_ADMIN
+AmbientCapabilities=CAP_SYS_RESOURCE CAP_NET_ADMIN
 
 # --- Filesystem Sandboxing ---
 # Protect system binaries (/usr, /boot) from modification but allow

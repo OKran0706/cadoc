@@ -1,0 +1,18 @@
+# test-env/config/sentinel-test.yaml
+# Minimal configuration for localized Auditd verification
+
+signing:
+  key_source: local
+  vault_path: /opt/sentinel/config/signer.key # Path inside container
+
+oob_alert:
+  url: http://localhost:8080 # Placeholder
+
+watchdog:
+  ingestion_url: "http://localhost:8443/ingest" # Placeholder
+  heartbeat_interval_seconds: 5
+  alert_threshold_seconds: 15
+
+maintenance:
+  vault_path: secret/canary/control
+  vault_field: auth_pubkey

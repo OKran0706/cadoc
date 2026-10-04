@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"sync"
@@ -53,21 +52,32 @@ func New(cfg config.SigningConfig, vc *vault.Client) (*Signer, error) {
 		if err != nil {
 			return nil, fmt.Errorf("decode vault key (hex expected): %w", err)
 		}
-		
-		log.Printf("[DEBUG] Signer loading key of size %d", len(keyBytes))
-		if len(keyBytes) == ed25519.SeedSize {
-			privKey = ed25519.NewKeyFromSeed(keyBytes)
-		} else if len(keyBytes) == ed25519.PrivateKeySize {
-			privKey = ed25519.PrivateKey(keyBytes)
-		} else {
-			return nil, fmt.Errorf("invalid ed25519 private key size: got %d, want 32 (seed) or 64 (full key)", len(keyBytes))
+		privKey, pubKeyFP, err = loadKeyBytes(keyBytes)
+		if err != nil {
+			return nil, err
 		}
-		pub := privKey.Public().(ed25519.PublicKey)
-		hash := sha256.Sum256(pub)
-		pubKeyFP = hex.EncodeToString(hash[:8])
+
+	case "local":
+		// Load from local file specified in config
+		if cfg.VaultPath == "" {
+			return nil, fmt.Errorf("local_path (reusing vault_path) is required for 'local' key_source")
+		}
+		keyData, err := os.ReadFile(cfg.VaultPath)
+		if err != nil {
+			return nil, fmt.Errorf("read local key file %s: %w", cfg.VaultPath, err)
+		}
+		
+		keyBytes, err := hex.DecodeString(strings.TrimSpace(string(keyData)))
+		if err != nil {
+			return nil, fmt.Errorf("decode local key (hex expected): %w", err)
+		}
+		privKey, pubKeyFP, err = loadKeyBytes(keyBytes)
+		if err != nil {
+			return nil, err
+		}
 
 	default:
-		return nil, fmt.Errorf("unsupported key_source: %s (only 'vault' is supported)", cfg.KeySource)
+		return nil, fmt.Errorf("unsupported key_source: %s (supported: 'vault', 'local')", cfg.KeySource)
 	}
 
 	return &Signer{
@@ -75,6 +85,23 @@ func New(cfg config.SigningConfig, vc *vault.Client) (*Signer, error) {
 		pubKeyFP: pubKeyFP,
 		hostname: hostname,
 	}, nil
+}
+
+// loadKeyBytes converts a raw byte slice into a valid Ed25519 key and fingerprint.
+func loadKeyBytes(keyBytes []byte) (ed25519.PrivateKey, string, error) {
+	var privKey ed25519.PrivateKey
+	if len(keyBytes) == ed25519.SeedSize {
+		privKey = ed25519.NewKeyFromSeed(keyBytes)
+	} else if len(keyBytes) == ed25519.PrivateKeySize {
+		privKey = ed25519.PrivateKey(keyBytes)
+	} else {
+		return nil, "", fmt.Errorf("invalid ed25519 private key size: got %d, want 32 (seed) or 64 (full key)", len(keyBytes))
+	}
+
+	pub := privKey.Public().(ed25519.PublicKey)
+	hash := sha256.Sum256(pub)
+	pubKeyFP := hex.EncodeToString(hash[:8])
+	return privKey, pubKeyFP, nil
 }
 
 // SignEvent signs an event and chains it to the previous event.
