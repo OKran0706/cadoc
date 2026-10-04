@@ -37,10 +37,8 @@ type SigningConfig struct {
 	VaultField string `yaml:"vault_field"` // Field name in the Vault secret (default: ed25519_privkey)
 }
 
-// TelemetryConfig configures the Kafka connection.
+// TelemetryConfig configures the mTLS ingestion connection.
 type TelemetryConfig struct {
-	KafkaBrokers []string `yaml:"kafka_brokers"`
-	Topic        string   `yaml:"topic"`
 	TLS          bool     `yaml:"tls"`
 	ClientCert   string   `yaml:"client_cert"`
 	ClientKey    string   `yaml:"client_key"`
@@ -72,7 +70,7 @@ type LogIntegrityConfig struct {
 	LocalLog       string `yaml:"local_log"`
 }
 
-// SelfProtectionConfig configures eBPF self-monitoring.
+// SelfProtectionConfig configures Auditd/Proc self-monitoring.
 type SelfProtectionConfig struct {
 	MonitorOwnPID       bool     `yaml:"monitor_own_pid"`
 	MonitorSignals      []string `yaml:"monitor_signals"`
@@ -93,9 +91,6 @@ func Load(path string) (*Config, error) {
 	}
 
 	// Defaults
-	if cfg.Telemetry.Topic == "" {
-		cfg.Telemetry.Topic = "canary-events"
-	}
 	if cfg.Watchdog.HeartbeatIntervalSeconds == 0 {
 		cfg.Watchdog.HeartbeatIntervalSeconds = 5
 	}

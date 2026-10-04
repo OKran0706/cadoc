@@ -14,21 +14,17 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/your-org/canary/sentinel/internal/sysutil"
 )
 
 // Serve starts a heartbeat listener on the given Unix socket path.
 // Incoming connections receive a JSON ACK with process identity.
 func Serve(ctx context.Context, socketPath, selfName string) error {
-	os.Remove(socketPath)
-	listener, err := net.Listen("unix", socketPath)
+	listener, err := sysutil.ListenUnix(ctx, socketPath, 0600)
 	if err != nil {
 		return fmt.Errorf("heartbeat listen: %w", err)
 	}
-
-	go func() {
-		<-ctx.Done()
-		listener.Close()
-	}()
 
 	for {
 		conn, err := listener.Accept()

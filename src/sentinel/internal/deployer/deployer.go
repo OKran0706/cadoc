@@ -11,7 +11,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"text/template"
@@ -68,32 +67,17 @@ type TemplateData struct {
 
 // RandomAlpha returns a random alphabetic string of length n.
 func (td TemplateData) RandomAlpha(n int) string {
-	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	result := make([]byte, n)
-	for i := range result {
-		b := make([]byte, 1)
-		rand.Read(b)
-		result[i] = chars[int(b[0])%len(chars)]
-	}
-	return string(result)
+	return sysutil.RandomAlpha(n)
 }
 
 // RandomBase64 returns a random base64-encoded string of length n.
 func (td TemplateData) RandomBase64(n int) string {
-	buf := make([]byte, n)
-	rand.Read(buf)
-	enc := base64.StdEncoding.EncodeToString(buf)
-	if len(enc) > n {
-		return enc[:n]
-	}
-	return enc
+	return sysutil.RandomBase64(n)
 }
 
 // RandomHex returns a random hex string of length n.
 func (td TemplateData) RandomHex(n int) string {
-	buf := make([]byte, (n+1)/2)
-	rand.Read(buf)
-	return hex.EncodeToString(buf)[:n]
+	return sysutil.RandomHex(n)
 }
 
 // FakeSSHKeyBody returns a base64 block resembling an SSH private key body.
@@ -206,12 +190,6 @@ func Deploy(profile *Profile, templateDir string, dryRun bool) ([]CanaryEntry, e
 		}
 	}
 
-	if !dryRun && len(entries) > 0 {
-		if err := generateTetragonPolicy(entries); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to generate tetragon policy: %v\n", err)
-		}
-	}
-
 	return entries, nil
 }
 
@@ -303,84 +281,3 @@ func getBlendedMtime(dir string) string {
 	return ""
 }
 
-func generateTetragonPolicy(entries []CanaryEntry) error {
-	tmpl := `
-apiVersion: cilium.io/v1alpha1
-kind: TracingPolicy
-metadata:
-  name: canary-file-protection
-  namespace: canary-system
-spec:
-  kprobes:
-  - call: "sys_openat"
-    syscall: true
-    args:
-    - index: 1
-      type: "string"
-    selectors:
-    - matchArgs:
-      - index: 1
-        operator: "Equal"
-        values:
-{{- range . }}
-        - "{{ .Path }}"
-{{- end }}
-      matchActions:
-      - action: Post
-  - call: "sys_unlinkat"
-    syscall: true
-    args:
-    - index: 1
-      type: "string"
-    selectors:
-    - matchArgs:
-      - index: 1
-        operator: "Equal"
-        values:
-{{- range . }}
-        - "{{ .Path }}"
-{{- end }}
-      matchActions:
-      - action: Post
-  - call: "sys_renameat2"
-    syscall: true
-    args:
-    - index: 1
-      type: "string"
-    selectors:
-    - matchArgs:
-      - index: 1
-        operator: "Equal"
-        values:
-{{- range . }}
-        - "{{ .Path }}"
-{{- end }}
-      matchActions:
-      - action: Post
-`
-	t, err := template.New("policy").Parse(tmpl)
-	if err != nil {
-		return err
-	}
-
-	f, err := os.CreateTemp("", "canary-policy-*.yaml")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-
-	if err := t.Execute(f, entries); err != nil {
-		return err
-	}
-	f.Close()
-
-	if !sysutil.IsCommandAvailable("kubectl") {
-		return fmt.Errorf("kubectl not found — skipping policy apply")
-	}
-
-	cmd := exec.Command("kubectl", "apply", "-f", f.Name())
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("kubectl apply failed: %v\nOutput: %s", err, out)
-	}
-	return nil
-}

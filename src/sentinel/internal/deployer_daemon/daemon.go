@@ -26,7 +26,13 @@ func StartDaemon(ctx context.Context, profileName, configDir, templateDir string
 		return
 	}
 
-	log.Printf("Canary Deployer Daemon started (Profile: %s, Interval: %ds)", profileName, intervalSec)
+	log.Printf("Canary Deployer Daemon started (Profile: %s, Mode: In-Memory)", profileName)
+
+	// 1. One-time brute-force cleanup on startup to remove orphans from previous runs
+	log.Println("Deployer Daemon: performing startup cleanup of orphaned canaries...")
+	removeOldCanariesBruteForce(profile)
+
+	var activeCanaries []deployer.CanaryEntry
 
 	for {
 		select {
@@ -34,47 +40,45 @@ func StartDaemon(ctx context.Context, profileName, configDir, templateDir string
 			log.Println("Canary Deployer Daemon stopping...")
 			return
 		default:
-			// 1. Remove Old Canaries
-			removed := removeOldCanaries(profile)
+			// 2. Remove previous canaries using in-memory state
+			for _, c := range activeCanaries {
+				_ = os.Remove(c.Path)
+			}
 
-			// 2. Deploy New Canaries
+			// 3. Deploy New Canaries
 			newCanaries, err := deployer.Deploy(profile, templateDir, false)
 			if err != nil {
 				log.Printf("Deployer Daemon: error during deployment: %v", err)
 			} else {
-				// 3. Build the Map
+				activeCanaries = newCanaries
+
+				// 4. Build and Emit the Map Event
 				canaryMap := deployer.CanaryMap{
-					Version:     "1.0",
+					Version:     "1.2",
 					GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 					Host:        hostname(),
 					Canaries:    newCanaries,
 				}
-
-				// 4. Build the Event
 				event := map[string]interface{}{
 					"type": "CANARY_MAP_DEPLOYED",
 					"map":  canaryMap,
 				}
 
-				// 5. Sign the Event using Sentinel's shared signer
 				envelope, _ := s.SignEvent(event)
 				payload, _ := signer.MarshalEnvelope(envelope)
 
-				// 6. Emit to Ingestion Service
 				if err := ic.Post(ctx, payload); err != nil {
-					log.Printf("Deployer Daemon: failed to emit Canary Map to Ingestion: %v", err)
+					log.Printf("Deployer Daemon: failed to emit map: %v", err)
 				} else {
-					log.Printf("Deployer Daemon: rotated %d canaries (removed %d). Signed map sent to Ingestion Service.", len(newCanaries), removed)
+					log.Printf("Deployer Daemon: rotated %d canaries. Signed map sent to Ingestion Service.", len(newCanaries))
 				}
 			}
 
-			// 7. Sleep with Jitter
+			// 5. Sleep with Jitter
 			jitter, _ := rand.Int(rand.Reader, big.NewInt(int64(maxJitterSec)))
 			sleepDur := time.Duration(intervalSec+int(jitter.Int64())) * time.Second
-			
 			select {
 			case <-time.After(sleepDur):
-				// continue to next iteration
 			case <-ctx.Done():
 				return
 			}
@@ -82,8 +86,7 @@ func StartDaemon(ctx context.Context, profileName, configDir, templateDir string
 	}
 }
 
-func removeOldCanaries(profile *deployer.Profile) int {
-	removed := 0
+func removeOldCanariesBruteForce(profile *deployer.Profile) {
 	for _, target := range profile.TargetDirectories {
 		files, err := os.ReadDir(target.Path)
 		if err != nil {
@@ -94,15 +97,20 @@ func removeOldCanaries(profile *deployer.Profile) int {
 				continue
 			}
 			filePath := filepath.Join(target.Path, file.Name())
-			content, err := os.ReadFile(filePath)
-			if err == nil && strings.Contains(string(content), "__CANARY_ID__=") {
-				if err := os.Remove(filePath); err == nil {
-					removed++
-				}
+			// Only read small chunk to check for marker
+			f, err := os.Open(filePath)
+			if err != nil {
+				continue
+			}
+			buf := make([]byte, 4096)
+			n, _ := f.Read(buf)
+			f.Close()
+
+			if n > 0 && strings.Contains(string(buf[:n]), "__CANARY_ID__=") {
+				_ = os.Remove(filePath)
 			}
 		}
 	}
-	return removed
 }
 
 func hostname() string {

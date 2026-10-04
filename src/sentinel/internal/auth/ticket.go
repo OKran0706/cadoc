@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -58,6 +59,7 @@ type Verifier struct {
 	keyID      string
 	hostname   string
 	usedNonces map[string]time.Time
+	mu         sync.RWMutex
 }
 
 // NewVerifierFromBytes creates a Verifier from raw Ed25519 public key bytes.
@@ -148,11 +150,18 @@ func (v *Verifier) Verify(signed *SignedTicket, expectedAction Action) (*Ticket,
 	if ticket.Nonce == "" {
 		return nil, fmt.Errorf("MISSING_NONCE: ticket must include a unique nonce")
 	}
+	v.mu.Lock()
 	if _, used := v.usedNonces[ticket.Nonce]; used {
+		v.mu.Unlock()
 		return nil, fmt.Errorf("NONCE_REPLAY: ticket nonce %q has already been used", ticket.Nonce)
 	}
 	v.usedNonces[ticket.Nonce] = time.Now()
-	v.cleanupNonces()
+	v.mu.Unlock()
+
+	// 8. Occasional cleanup (roughly every 100 verifications)
+	if time.Now().Unix()%100 == 0 {
+		v.cleanupNonces()
+	}
 
 	return &ticket, nil
 }
@@ -171,6 +180,8 @@ func (v *Verifier) VerifyFromJSON(ticketJSON []byte, expectedAction Action) (*Ti
 
 // cleanupNonces removes nonces older than 1 hour.
 func (v *Verifier) cleanupNonces() {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	cutoff := time.Now().Add(-1 * time.Hour)
 	for nonce, ts := range v.usedNonces {
 		if ts.Before(cutoff) {

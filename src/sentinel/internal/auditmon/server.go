@@ -8,9 +8,9 @@ import (
 	"context"
 	"log"
 	"net"
-	"os"
 	"strings"
 	"sync"
+	"github.com/your-org/canary/sentinel/internal/sysutil"
 )
 
 var (
@@ -20,19 +20,11 @@ var (
 
 // StartServer listens on a Unix socket for events forwarded by the audit consumer plugin.
 func StartServer(ctx context.Context, socketPath string, handler func(event *AuditEvent)) error {
-	// Clean up existing socket
-	os.Remove(socketPath)
-
-	lc := net.ListenConfig{}
-	listener, err := lc.Listen(ctx, "unix", socketPath)
+	listener, err := sysutil.ListenUnix(ctx, socketPath, 0660)
 	if err != nil {
 		return err
 	}
 	defer listener.Close()
-
-	if err := os.Chmod(socketPath, 0660); err != nil {
-		log.Printf("[auditmon] Warning: failed to chmod socket: %v", err)
-	}
 
 	log.Printf("[auditmon] Unix socket server listening on %s", socketPath)
 

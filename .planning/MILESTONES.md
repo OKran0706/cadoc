@@ -1,4 +1,14 @@
-# Milestones
+# Milestone History
+
+## v1.3 — Auditd Transition
+**Shipped:** 2026-04-22
+**Summary:** Transitioned from eBPF/Tetragon to native Auditd monitoring.
+**Key Accomplishments:**
+- Implemented native Auditd record reassembly and IPC worker.
+- Established live, memory-only rule injection via `AuditctlManager`.
+- Implemented resilient IPC with exponential backoff and subsystem health monitoring.
+- Achieved Zero-Dependency and Low-Privilege Sentinel operation.
+**Archived:** [.planning/milestones/v1.3-phases/](file:///c:/Users/Karan/Desktop/canary/cadoc/.planning/milestones/v1.3-phases/)
 
 ## v1.2 Integrated Test Environment (Shipped: 2026-04-21)
 

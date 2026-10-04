@@ -13,7 +13,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/your-org/canary/sentinel/internal/config"
@@ -111,7 +110,8 @@ func (s *Signer) SignEvent(event map[string]interface{}) (map[string]interface{}
 	defer s.mu.Unlock()
 
 	event["prev_hash"] = s.prevHash
-	event["seq"] = atomic.AddUint64(&s.sequence, 1)
+	s.sequence++
+	event["seq"] = s.sequence
 	event["ts"] = time.Now().UTC().Format(time.RFC3339Nano)
 	event["host"] = s.hostname
 

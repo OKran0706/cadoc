@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/your-org/canary/sentinel/internal/auditmon"
 	"github.com/your-org/canary/sentinel/internal/ingestclient"
 	"github.com/your-org/canary/sentinel/internal/signer"
 )
@@ -52,7 +53,7 @@ func DetectEnvironment() Environment {
 
 // Start initializes self-tamper monitoring using the best available strategy
 // for the detected runtime environment.
-func Start(ctx context.Context, selfPID int, s *signer.Signer, ic *ingestclient.Client) error {
+func Start(ctx context.Context, selfPID int, s *signer.Signer, ic *ingestclient.Client, mgr *auditmon.AuditctlManager) error {
 	env := DetectEnvironment()
 
 	// Emit a signed event recording which monitoring mode we entered.
@@ -63,15 +64,24 @@ func Start(ctx context.Context, selfPID int, s *signer.Signer, ic *ingestclient.
 	}
 	envelope, _ := s.SignEvent(modeEvent)
 	if payload, err := signer.MarshalEnvelope(envelope); err == nil {
-		if err := ic.Post(ctx, payload); err != nil {
-			log.Printf("[selfmon] Failed to emit mode event: %v", err)
-		}
+		ic.Post(ctx, payload)
 	}
 
 	switch env {
 	case EnvAuditd:
-		log.Println("[selfmon] Native Auditd mode active — monitoring via audispd plugin")
-		return nil // Server is started in main.go
+		log.Println("[selfmon] Native Auditd mode active — starting subsystem health monitor")
+		go auditmon.MonitorHealth(ctx, mgr, 10*time.Second, func(event auditmon.SubsystemEvent, details map[string]interface{}) {
+			log.Printf("[selfmon] AUDIT_SUBSYSTEM_EVENT: %s %+v", event, details)
+			evt := map[string]interface{}{
+				"type":    string(event),
+				"details": details,
+				"ts":      time.Now().UTC().Format(time.RFC3339Nano),
+			}
+			env, _ := s.SignEvent(evt)
+			pay, _ := signer.MarshalEnvelope(env)
+			ic.Post(ctx, pay)
+		})
+		return nil
 	default:
 		// /proc fallback is started by the caller in main.go when Start() returns an error.
 		return fmt.Errorf("auditd runtime not available — use /proc fallback")

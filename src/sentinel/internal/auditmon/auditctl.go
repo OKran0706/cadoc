@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -26,6 +27,9 @@ func NewAuditctlManager(key string) *AuditctlManager {
 // AddWatch adds a directory or file watch at runtime.
 // -p wa: watch for write and attribute changes.
 func (m *AuditctlManager) AddWatch(path string) error {
+	if err := validatePath(path); err != nil {
+		return err
+	}
 	cmd := exec.Command("auditctl", "-w", path, "-p", "wa", "-k", m.key)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("auditctl add failed: %v (output: %s)", err, string(out))
@@ -36,6 +40,9 @@ func (m *AuditctlManager) AddWatch(path string) error {
 
 // RemoveWatch removes a directory or file watch.
 func (m *AuditctlManager) RemoveWatch(path string) error {
+	if err := validatePath(path); err != nil {
+		return err
+	}
 	cmd := exec.Command("auditctl", "-W", path, "-p", "wa", "-k", m.key)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("auditctl remove failed: %v (output: %s)", err, string(out))
@@ -46,9 +53,25 @@ func (m *AuditctlManager) RemoveWatch(path string) error {
 
 // ClearAll removes all rules associated with this manager's key.
 func (m *AuditctlManager) ClearAll() error {
-	// auditctl doesn't support bulk delete by key easily, 
-	// but we can delete the specific watches if we tracked them.
-	// For now, we rely on individual RemoveWatch calls or auditctl -D (nuclear).
+	// auditctl -D deletes all rules, but we can filter by key
+	cmd := exec.Command("auditctl", "-k", m.key, "-D")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		// Ignore errors if no rules found
+		if !strings.Contains(string(out), "No rules") {
+			return fmt.Errorf("auditctl clear failed: %v (output: %s)", err, string(out))
+		}
+	}
+	log.Printf("[auditmon] All live rules for key %s cleared", m.key)
+	return nil
+}
+
+func validatePath(path string) error {
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("invalid path: must be absolute")
+	}
+	if strings.HasPrefix(path, "-") {
+		return fmt.Errorf("invalid path: potential flag injection")
+	}
 	return nil
 }
 

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/hashicorp/vault/api"
 )
@@ -17,6 +18,7 @@ import (
 // Client wraps the official Vault API client.
 type Client struct {
 	vault *api.Client
+	mu    sync.Mutex
 }
 
 // New creates a new Vault client. 
@@ -45,6 +47,8 @@ func New() (*Client, error) {
 // SetTLSConfig updates the underlying Vault client with a specific TLS configuration.
 // Required for cert-based re-authentication.
 func (c *Client) SetTLSConfig(tlsConfig *tls.Config) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	token := c.vault.Token() // Preserve existing session token
 	apiConfig := c.vault.CloneConfig()
 	apiConfig.HttpClient.Transport = &http.Transport{
@@ -89,11 +93,17 @@ func (c *Client) Unwrap(wrappedToken string) (string, error) {
 		return "", fmt.Errorf("wrapped token is empty")
 	}
 
-	// Use the wrapped token to authenticate for the unwrap call
-	c.vault.SetToken(wrappedToken)
+	// 1. Create an isolated, ephemeral client for the unwrap operation
+	// to avoid corrupting the main client's session token.
+	apiConfig := c.vault.CloneConfig()
+	tempClient, err := api.NewClient(apiConfig)
+	if err != nil {
+		return "", err
+	}
+	tempClient.SetToken(wrappedToken)
 
-	// Execute unwrap
-	secret, err := c.vault.Logical().Unwrap(wrappedToken)
+	// 2. Execute unwrap using the isolated client
+	secret, err := tempClient.Logical().Unwrap(wrappedToken)
 	if err != nil {
 		return "", fmt.Errorf("vault unwrap failed: %w", err)
 	}
@@ -103,13 +113,9 @@ func (c *Client) Unwrap(wrappedToken string) (string, error) {
 	}
 
 	var token string
-
-	// Extract tokens from Auth section (standard for wrapped tokens)
 	if secret.Auth != nil {
 		token = secret.Auth.ClientToken
 	}
-
-	// Fallback/Override from Data section (if it's a generic KV unwrap)
 	if token == "" && secret.Data != nil {
 		if val, ok := secret.Data["token"].(string); ok {
 			token = val
@@ -117,11 +123,13 @@ func (c *Client) Unwrap(wrappedToken string) (string, error) {
 	}
 
 	if token == "" {
-		return "", fmt.Errorf("could not find 'token' in unwrapped response (Data and Auth are empty)")
+		return "", fmt.Errorf("could not find 'token' in unwrapped response")
 	}
 
-	// Set the real token on the client
+	// 3. Update the main client's token under lock
+	c.mu.Lock()
 	c.vault.SetToken(token)
+	c.mu.Unlock()
 
 	return token, nil
 }

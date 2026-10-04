@@ -4,13 +4,17 @@
 package sysutil
 
 import (
+	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,10 +29,6 @@ import (
 func UnwrapVaultToken(vc *vault.Client, providedToken, processName string) error {
 	wrapped := providedToken
 	
-	if wrapped == "" {
-		return nil // No wrapped token provided
-	}
-
 	if wrapped == "" {
 		return nil // No wrapped token provided
 	}
@@ -96,8 +96,9 @@ func VerifySelfIntegrity(binaryName string) (expected string, actual string, err
 	}
 	actualHash := hex.EncodeToString(h.Sum(nil))
 
-	// In a real implementation this fetches from vault: vault.GetSecret("canary/binary-hashes/" + binaryName)
-	// For simulation, we assume expected == actual unless tampered.
+	// FIXME: This is a prototype stub. In production, the expected hash must be 
+	// fetched from a secure remote source (Vault) and verified against a signed manifest.
+	log.Printf("[sysutil] WARNING: Self-integrity check is running in prototype mode (trust-on-first-use)")
 	expectedHash := actualHash
 
 	if actualHash != expectedHash {
@@ -231,4 +232,53 @@ func parseVaultLocation(loc string) (string, string) {
 	return loc, "cert"
 }
 
+// ListenUnix creates a Unix domain socket listener with appropriate cleanup and permissions.
+func ListenUnix(ctx context.Context, socketPath string, perm os.FileMode) (net.Listener, error) {
+	// Clean up existing socket
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("remove existing socket: %w", err)
+	}
 
+	lc := net.ListenConfig{}
+	listener, err := lc.Listen(ctx, "unix", socketPath)
+	if err != nil {
+		return nil, fmt.Errorf("listen unix: %w", err)
+	}
+
+	if err := os.Chmod(socketPath, perm); err != nil {
+		listener.Close()
+		return nil, fmt.Errorf("chmod socket: %w", err)
+	}
+
+	return listener, nil
+}
+
+// RandomAlpha returns a random alphabetic string of length n.
+func RandomAlpha(n int) string {
+	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	result := make([]byte, n)
+	for i := range result {
+		b := make([]byte, 1)
+		rand.Read(b)
+		result[i] = chars[int(b[0])%len(chars)]
+	}
+	return string(result)
+}
+
+// RandomBase64 returns a random base64-encoded string of length n.
+func RandomBase64(n int) string {
+	buf := make([]byte, n)
+	rand.Read(buf)
+	enc := base64.StdEncoding.EncodeToString(buf)
+	if len(enc) > n {
+		return enc[:n]
+	}
+	return enc
+}
+
+// RandomHex returns a random hex string of length n.
+func RandomHex(n int) string {
+	buf := make([]byte, (n+1)/2)
+	rand.Read(buf)
+	return hex.EncodeToString(buf)[:n]
+}

@@ -222,50 +222,16 @@ func main() {
 		log.Printf("Warning: could not write PID file: %v", err)
 	}
 
-	// 2. Start eBPF/Audit self-monitor
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if err := selfmon.Start(ctx, os.Getpid(), s, ic); err != nil {
-			log.Printf("Self-monitor error (falling back to /proc polling): %v", err)
-			selfmon.PollProc(ctx, os.Getpid(), s, ic)
-		}
-	}()
+	// 2. Start Self-Monitoring & Health Management
+	auditMgr := auditmon.NewAuditctlManager("canary")
+	auditMgr.ClearAll() // Flush any stale rules from previous runs
+	if err := selfmon.Start(ctx, os.Getpid(), s, ic, auditMgr); err != nil {
+		log.Printf("Auditd self-monitor not available: %v. Starting /proc fallback...", err)
+		go selfmon.PollProc(ctx, os.Getpid(), s, ic)
+	}
 
 	// 11.05: Start Auditmon IPC Server (If in Auditd mode)
 	if selfmon.DetectEnvironment() == selfmon.EnvAuditd {
-		auditMgr := auditmon.NewAuditctlManager("canary")
-		
-		// Start health monitor
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			auditmon.MonitorHealth(ctx, auditMgr, 30*time.Second, func(event auditmon.SubsystemEvent, details map[string]interface{}) {
-				log.Printf("[main] Auditd health event: %s", event)
-				
-				// Map to Kafka event type
-				eventType := "SENTINEL_AUDITD_HEALTH"
-				if event == auditmon.EventAuditdFailed {
-					eventType = "SENTINEL_AUDITD_FAILED"
-				} else if event == auditmon.EventAuditdRecovered {
-					eventType = "SENTINEL_AUDITD_RECOVERED"
-				}
-
-				healthMap := map[string]interface{}{
-					"type":  eventType,
-					"event": string(event),
-				}
-				for k, v := range details {
-					healthMap[k] = v
-				}
-
-				envelope, _ := s.SignEvent(healthMap)
-				payload, _ := signer.MarshalEnvelope(envelope)
-				if err := ic.Post(ctx, payload); err != nil {
-					log.Printf("[main] Failed to post health alert: %v", err)
-				}
-			})
-		}()
 
 		// Start IPC Server
 		wg.Add(1)
