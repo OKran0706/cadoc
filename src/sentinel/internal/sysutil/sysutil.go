@@ -109,14 +109,16 @@ func VerifySelfIntegrity(binaryName string) (expected string, actual string, err
 // If diskFallback is true and Vault locations are empty, it will attempt to load
 // certs from the file paths in config (used during restart without join-token).
 // The private key is ALWAYS sourced from Vault — never from disk.
-func LoadTLSConfig(cfg config.TelemetryConfig, vc *vault.Client, diskFallback bool) (*tls.Config, error) {
+func LoadTLSConfig(cfg config.TelemetryConfig, vc *vault.Client, diskFallback bool) (*tls.Config, []byte, []byte, error) {
 	if !cfg.TLS {
-		return nil, nil
+		return nil, nil, nil, nil
 	}
 
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 	}
+
+	var caCertData, clientCertData []byte
 
 	// Helper to fetch from Vault or fallback to file
 	getCertData := func(vaultLoc, filePath string) ([]byte, error) {
@@ -139,40 +141,41 @@ func LoadTLSConfig(cfg config.TelemetryConfig, vc *vault.Client, diskFallback bo
 	}
 
 	// Load CA Cert
-	caCertData, err := getCertData(cfg.VaultCACert, cfg.CACert)
+	var err error
+	caCertData, err = getCertData(cfg.VaultCACert, cfg.CACert)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load CA cert: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to load CA cert: %w", err)
 	}
 	if len(caCertData) > 0 {
 		caCertPool := x509.NewCertPool()
 		if !caCertPool.AppendCertsFromPEM(caCertData) {
-			return nil, fmt.Errorf("failed to parse CA certificate")
+			return nil, nil, nil, fmt.Errorf("failed to parse CA certificate")
 		}
 		tlsConfig.RootCAs = caCertPool
 	}
 
 	// Load Client Cert/Key
-	clientCertData, err := getCertData(cfg.VaultClientCert, cfg.ClientCert)
+	clientCertData, err = getCertData(cfg.VaultClientCert, cfg.ClientCert)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load client cert: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to load client cert: %w", err)
 	}
 	// Private key is ALWAYS from Vault — never from disk
 	clientKeyData, err := getCertData(cfg.VaultClientKey, "")
 	if err != nil {
-		return nil, fmt.Errorf("failed to load client key: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to load client key: %w", err)
 	}
 
 	if len(clientCertData) > 0 && len(clientKeyData) > 0 {
 		cert, err := tls.X509KeyPair(clientCertData, clientKeyData)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load client key pair: %w", err)
+			return nil, nil, nil, fmt.Errorf("failed to load client key pair: %w", err)
 		}
 		tlsConfig.Certificates = []tls.Certificate{cert}
 	} else if len(clientCertData) > 0 || len(clientKeyData) > 0 {
-		return nil, fmt.Errorf("both client cert and key must be provided")
+		return nil, nil, nil, fmt.Errorf("both client cert and key must be provided")
 	}
 
-	return tlsConfig, nil
+	return tlsConfig, caCertData, clientCertData, nil
 }
 
 // PersistPublicCerts writes the CA and mTLS public certificates to disk

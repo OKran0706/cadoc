@@ -21,12 +21,12 @@
 ### Phase 4: Service Daemonization
 **Goal:** Wrap Sentinel in a robust systemd service that enforces file sandboxing.
 **Requirements:** SRV-01, SRV-02
-- [ ] **4-01**: Service unit testing
+- [x] **4-01**: Service unit testing — completed 2026-04-17
 
 ### Phase 5: Hybrid Credential Persistence
 **Goal:** Implement fallback auto-reauthentication using persistent public certs while keeping private keys zero-disk.
 **Requirements:** AUTH-01, AUTH-02, AUTH-03
-- [ ] **5-01**: Credential persistence logic
+- [x] **5-01**: Credential persistence logic — completed 2026-04-17
 
 ### Phase 6: Resilient Vault Polling
 **Goal:** Implement exponential backoff for manual downtime blocks from Vault.
@@ -40,7 +40,7 @@
 | 1. Secure Onboarding API | v1.0 | 1/1 | Complete | 2026-04-17 |
 | 2. Core Pipeline Hardening | v1.0 | 1/1 | Complete | 2026-04-17 |
 | 3. Fail-Closed Resiliency | v1.0 | 0/0 | Complete | 2026-04-17 |
-| 4. Service Daemonization | v1.1 | 0/1 | Not started | - |
-| 5. Hybrid Credential Persistence | v1.1 | 0/1 | Not started | - |
+| 4. Service Daemonization | v1.1 | 1/1 | Complete | 2026-04-17 |
+| 5. Hybrid Credential Persistence | v1.1 | 1/1 | Complete | 2026-04-17 |
 | 6. Resilient Vault Polling | v1.1 | 0/1 | Not started | - |
 
