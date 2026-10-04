@@ -77,6 +77,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--notify-keyspace-events", "Ex"]
     ports:
       - "6379:6379"
 
@@ -121,6 +122,31 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+
+  ingestion-service:
+    build:
+      context: ./src/ingestion_service
+      dockerfile: Dockerfile
+    environment:
+      REDIS_URL: "redis://redis:6379/0"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      - redis
+      - kafka
+    volumes:
+      - ./src/ingestion_service:/app
+      - ./deploy/certs/ingestion:/certs:ro
+
+  ingestion-lb:
+    image: nginx:alpine
+    depends_on:
+      - ingestion-service
+    volumes:
+      - ./deploy/nginx/ingestion-lb.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/certs/ingestion:/etc/nginx/certs:ro
+    ports:
+      - "8443:8443"
 
 volumes:
   postgres-data:
