@@ -18,7 +18,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/segmentio/kafka-go"
+	"github.com/your-org/canary/sentinel/internal/ingestclient"
 	"github.com/your-org/canary/sentinel/internal/signer"
 )
 
@@ -163,14 +163,11 @@ func DetectEnvironment() Environment {
 }
 
 // Start initializes self-tamper monitoring using the best available strategy
-// for the detected runtime environment. It returns an error only if a
-// critical failure occurs; graceful degradation to /proc is not an error.
-func Start(ctx context.Context, selfPID int, s *signer.Signer, writer *kafka.Writer) error {
+// for the detected runtime environment.
+func Start(ctx context.Context, selfPID int, s *signer.Signer, ic *ingestclient.Client) error {
 	env := DetectEnvironment()
 
 	// Emit a signed event recording which monitoring mode we entered.
-	// The Detection Engine can alert if a production host unexpectedly
-	// reports "proc-fallback" (possible indicator of Tetragon removal).
 	modeEvent := map[string]interface{}{
 		"type":            "SELFMON_MODE_SELECTED",
 		"monitoring_mode": env.String(),
@@ -178,7 +175,9 @@ func Start(ctx context.Context, selfPID int, s *signer.Signer, writer *kafka.Wri
 	}
 	envelope, _ := s.SignEvent(modeEvent)
 	if payload, err := signer.MarshalEnvelope(envelope); err == nil {
-		writer.WriteMessages(ctx, kafka.Message{Value: payload})
+		if err := ic.Post(ctx, payload); err != nil {
+			log.Printf("[selfmon] Failed to emit mode event: %v", err)
+		}
 	}
 
 	switch env {
@@ -188,7 +187,6 @@ func Start(ctx context.Context, selfPID int, s *signer.Signer, writer *kafka.Wri
 		return startStandalone(ctx, selfPID)
 	default:
 		// /proc fallback is started by the caller in main.go when Start() returns an error.
-		// Return an error to trigger that path.
 		return fmt.Errorf("no eBPF runtime available — use /proc fallback")
 	}
 }
@@ -208,7 +206,6 @@ func renderPolicy(selfPID int) ([]byte, error) {
 }
 
 // startKubernetes applies the TracingPolicy via kubectl into the cluster
-// where a Tetragon DaemonSet is expected to pick it up.
 func startKubernetes(ctx context.Context, selfPID int) error {
 	policyYAML, err := renderPolicy(selfPID)
 	if err != nil {
@@ -236,8 +233,6 @@ func startKubernetes(ctx context.Context, selfPID int) error {
 }
 
 // startStandalone writes the TracingPolicy directly to the Tetragon policy
-// directory on a bare VM. The Tetragon daemon watches this directory and
-// automatically loads new policies via inotify.
 func startStandalone(ctx context.Context, selfPID int) error {
 	policyYAML, err := renderPolicy(selfPID)
 	if err != nil {
@@ -251,8 +246,7 @@ func startStandalone(ctx context.Context, selfPID int) error {
 
 	log.Printf("[selfmon] Tetragon TracingPolicy written to %s for PID %d", policyPath, selfPID)
 
-	// Verify the Tetragon daemon picked up the policy by checking its gRPC endpoint.
-	// A small delay gives the file watcher time to react.
+	// Verify the Tetragon daemon picked up the policy
 	time.Sleep(2 * time.Second)
 	conn, err := net.DialTimeout("tcp", tetragonGRPCSocket, 3*time.Second)
 	if err != nil {
@@ -264,9 +258,8 @@ func startStandalone(ctx context.Context, selfPID int) error {
 	return nil
 }
 
-// PollProc is the fallback self-monitoring mechanism. It watches /proc/self
-// for signs of tampering when eBPF is unavailable.
-func PollProc(ctx context.Context, selfPID int, s *signer.Signer, writer *kafka.Writer) {
+// PollProc is the fallback self-monitoring mechanism using /proc.
+func PollProc(ctx context.Context, selfPID int, s *signer.Signer, ic *ingestclient.Client) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
@@ -289,7 +282,9 @@ func PollProc(ctx context.Context, selfPID int, s *signer.Signer, writer *kafka.
 				}
 				envelope, _ := s.SignEvent(event)
 				payload, _ := signer.MarshalEnvelope(envelope)
-				writer.WriteMessages(ctx, kafka.Message{Value: payload})
+				if err := ic.Post(ctx, payload); err != nil {
+					log.Printf("[selfmon] Failed to emit tamper alert: %v", err)
+				}
 				log.Printf("[selfmon] SENTINEL_TAMPER: cmdline changed for PID %d", selfPID)
 			}
 
@@ -303,7 +298,9 @@ func PollProc(ctx context.Context, selfPID int, s *signer.Signer, writer *kafka.
 				}
 				envelope, _ := s.SignEvent(event)
 				payload, _ := signer.MarshalEnvelope(envelope)
-				writer.WriteMessages(ctx, kafka.Message{Value: payload})
+				if err := ic.Post(ctx, payload); err != nil {
+					log.Printf("[selfmon] Failed to emit ptrace alert: %v", err)
+				}
 				log.Printf("[selfmon] SENTINEL_PTRACE: PID %d being traced by PID %d", selfPID, tracerPID)
 			}
 		}

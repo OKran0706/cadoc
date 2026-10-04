@@ -13,13 +13,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/segmentio/kafka-go"
 	"github.com/your-org/canary/sentinel/internal/deployer"
+	"github.com/your-org/canary/sentinel/internal/ingestclient"
 	"github.com/your-org/canary/sentinel/internal/signer"
 )
 
 // StartDaemon runs the continuous canary deployment and rotation loop.
-func StartDaemon(ctx context.Context, profileName, configDir, templateDir string, intervalSec, maxJitterSec int, s *signer.Signer, writer *kafka.Writer) {
+func StartDaemon(ctx context.Context, profileName, configDir, templateDir string, intervalSec, maxJitterSec int, s *signer.Signer, ic *ingestclient.Client) {
 	profile, err := deployer.LoadProfile(configDir, profileName)
 	if err != nil {
 		log.Printf("Deployer Daemon: failed to load profile %s: %v", profileName, err)
@@ -60,14 +60,11 @@ func StartDaemon(ctx context.Context, profileName, configDir, templateDir string
 				envelope, _ := s.SignEvent(event)
 				payload, _ := signer.MarshalEnvelope(envelope)
 
-				// 6. Emit to Kafka securely
-				err = writer.WriteMessages(ctx, kafka.Message{
-					Value: payload,
-				})
-				if err != nil {
-					log.Printf("Deployer Daemon: failed to emit Canary Map to Kafka: %v", err)
+				// 6. Emit to Ingestion Service
+				if err := ic.Post(ctx, payload); err != nil {
+					log.Printf("Deployer Daemon: failed to emit Canary Map to Ingestion: %v", err)
 				} else {
-					log.Printf("Deployer Daemon: rotated %d canaries (removed %d). Signed map sent to Kafka.", len(newCanaries), removed)
+					log.Printf("Deployer Daemon: rotated %d canaries (removed %d). Signed map sent to Ingestion Service.", len(newCanaries), removed)
 				}
 			}
 

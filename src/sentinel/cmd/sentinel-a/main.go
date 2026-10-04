@@ -27,14 +27,12 @@ import (
 
 	"github.com/your-org/canary/sentinel/internal/auth"
 	"github.com/your-org/canary/sentinel/internal/config"
-	// "github.com/your-org/canary/sentinel/internal/heartbeat" // Phase 1: Sentinel-B not shipped
 	"github.com/your-org/canary/sentinel/internal/deployer_daemon"
+	"github.com/your-org/canary/sentinel/internal/ingestclient"
 	"github.com/your-org/canary/sentinel/internal/selfmon"
 	"github.com/your-org/canary/sentinel/internal/signer"
 	"github.com/your-org/canary/sentinel/internal/sysutil"
 	"github.com/your-org/canary/sentinel/internal/vault"
-
-	"github.com/segmentio/kafka-go"
 )
 
 // authorizedShutdown is set to 1 when a valid maintenance ticket has been processed.
@@ -148,10 +146,8 @@ func main() {
 		_ = vaultClient.SetTLSConfig(tlsConfig)
 	}
 
-	kafkaTransport := &kafka.Transport{}
-	if cfg.Telemetry.TLS {
-		kafkaTransport.TLS = tlsConfig
-	}
+	// 4. Initialize Ingestion Client
+	ic := ingestclient.New(cfg.Watchdog.IngestionURL, tlsConfig)
 
 	// 1. Runtime Binary Verification
 	if expected, actual, err := sysutil.VerifySelfIntegrity("sentinel-a"); err != nil {
@@ -228,9 +224,9 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := selfmon.Start(ctx, os.Getpid(), s, writer); err != nil {
+		if err := selfmon.Start(ctx, os.Getpid(), s, ic); err != nil {
 			log.Printf("Self-monitor error (falling back to /proc polling): %v", err)
-			selfmon.PollProc(ctx, os.Getpid(), s, writer)
+			selfmon.PollProc(ctx, os.Getpid(), s, ic)
 		}
 	}()
 
@@ -251,7 +247,9 @@ func main() {
 	}
 	envelope, _ := s.SignEvent(capEvent)
 	payload, _ := signer.MarshalEnvelope(envelope)
-	writer.WriteMessages(ctx, kafka.Message{Value: payload})
+	if err := ic.Post(ctx, payload); err != nil {
+		log.Printf("Failed to emit initial capability proof: %v", err)
+	}
 
 	// 5. Start internal Canary Deployer subsystem
 	if *deployerProfile != "" {
@@ -290,7 +288,7 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		pollKillSwitch(ctx, cfg, s, writer, ticketVerifier, vaultClient, stateDir)
+		pollKillSwitch(ctx, cfg, s, ic, ticketVerifier, vaultClient, stateDir)
 	}()
 
 	// Main event loop: emit heartbeats and collect events from local sources
@@ -308,11 +306,13 @@ func main() {
 				event := map[string]interface{}{
 					"type":           "SENTINEL_HEARTBEAT",
 					"source_process": "sentinel-a",
+					"id":             "sentinel-a", // Explicit ID for indexing
 				}
 				envelope, _ := s.SignEvent(event)
 				payload, _ := signer.MarshalEnvelope(envelope)
-				if err := writer.WriteMessages(ctx, kafka.Message{Value: payload}); err != nil {
-					log.Printf("Kafka write error: %v", err)
+
+				if err := ic.Post(ctx, payload); err != nil {
+					log.Printf("Heartbeat ingestion error: %v", err)
 				}
 			}
 		}
@@ -331,9 +331,10 @@ func main() {
 			"type":   "UNAUTHORIZED_SHUTDOWN",
 			"signal": sig.String(),
 		}
-		envelope, _ := s.SignEvent(unauthorizedEvent)
-		payload, _ := signer.MarshalEnvelope(envelope)
-		writer.WriteMessages(context.Background(), kafka.Message{Value: payload})
+		env, _ := s.SignEvent(unauthorizedEvent)
+		p, _ := signer.MarshalEnvelope(env)
+		// Try to emit before dying (best effort)
+		_ = ic.Post(context.Background(), p)
 
 		// Also send OOB alert (bypasses Kafka in case Kafka is compromised)
 		sendOOBAlert(cfg.OOBAlert.URL, map[string]interface{}{
@@ -361,7 +362,7 @@ func verifyKafka(brokers []string) error {
 	return fmt.Errorf("no Kafka broker reachable from %v", brokers)
 }
 
-func pollKillSwitch(ctx context.Context, cfg *config.Config, s *signer.Signer, writer *kafka.Writer, verifier *auth.Verifier, vc *vault.Client, stateDir string) {
+func pollKillSwitch(ctx context.Context, cfg *config.Config, s *signer.Signer, ic *ingestclient.Client, verifier *auth.Verifier, vc *vault.Client, stateDir string) {
 	oobUrl := cfg.OOBAlert.URL
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
@@ -438,7 +439,9 @@ func pollKillSwitch(ctx context.Context, cfg *config.Config, s *signer.Signer, w
 			}
 			envelope, _ := s.SignEvent(degEvent)
 			payload, _ := signer.MarshalEnvelope(envelope)
-			writer.WriteMessages(ctx, kafka.Message{Value: payload})
+			if err := ic.Post(ctx, payload); err != nil {
+				log.Printf("Failed to emit DEGRADED event during killswitch: %v", err)
+			}
 
 			log.Println("KILL SWITCH TRIGGERED — SHUTTING DOWN")
 			os.Exit(0)
@@ -482,7 +485,7 @@ func sendOOBAlert(url string, payload map[string]interface{}) {
 	}
 }
 
-func processMaintenanceTicket(ctx context.Context, ticketJSONStr, actionStr string, verifier *auth.Verifier, s *signer.Signer, transport *kafka.Transport, cfg *config.Config) {
+func processMaintenanceTicket(ctx context.Context, ticketJSONStr, actionStr string, verifier *auth.Verifier, s *signer.Signer, ic *ingestclient.Client, cfg *config.Config) {
 	if verifier == nil {
 		log.Fatal("Cannot process auth ticket: maintenance verifier not initialized")
 	}
@@ -508,7 +511,7 @@ func processMaintenanceTicket(ctx context.Context, ticketJSONStr, actionStr stri
 	})
 	_ = os.WriteFile(maintFile, maintData, 0644)
 
-	// 3. Emit MAINTENANCE_AUTHORIZED event to Kafka
+	// 3. Emit MAINTENANCE_AUTHORIZED event to Ingestion Service
 	maintEvent := map[string]interface{}{
 		"type":   "MAINTENANCE_AUTHORIZED",
 		"action": string(ticket.Action),
@@ -519,14 +522,9 @@ func processMaintenanceTicket(ctx context.Context, ticketJSONStr, actionStr stri
 	authPayload, _ := signer.MarshalEnvelope(authEnvelope)
 
 	// Must emit before proceeding/exiting
-	tmpWriter := &kafka.Writer{
-		Addr:      kafka.TCP(cfg.Telemetry.KafkaBrokers...),
-		Topic:     cfg.Telemetry.Topic,
-		Balancer:  &kafka.LeastBytes{},
-		Transport: transport,
+	if err := ic.Post(context.Background(), authPayload); err != nil {
+		log.Printf("Failed to emit maintenance authorization: %v", err)
 	}
-	_ = tmpWriter.WriteMessages(context.Background(), kafka.Message{Value: authPayload})
-	_ = tmpWriter.Close()
 
 	if auth.Action(actionStr) == auth.ActionShutdown || auth.Action(actionStr) == auth.ActionDeregister {
 		log.Printf("Authorized %s — exiting cleanly", actionStr)

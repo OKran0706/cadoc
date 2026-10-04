@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A tamper-resistant, defense-in-depth canary detection system for adversarial environments. It deploys high-fidelity decoy assets (files, PVCs, databases) with a hardened, zero-disk Sentinel daemon that ships signed events remotely, making evasion extremely expensive for attackers.
+A tamper-resistant, defense-in-depth canary detection system for adversarial environments. It deploys high-fidelity decoy assets (files, PVCs, databases) with a hardened, zero-disk Sentinel daemon that ships signed events to a centralized, non-blocking ingestion service.
 
 ## Core Value
 
@@ -15,58 +15,44 @@ Asymmetric cost: It must be cheap for an admin to deploy, but extremely expensiv
 - ✓ Standalone Sentinel Daemon (eBPF telemetry gathering) — existing
 - ✓ Detection Engine evaluating Kafka event streams — existing
 - ✓ Zero-disk capabilities within the `sysutil` internal package — existing
+- ✓ **Service Daemonization**: auto-restarting systemd integration (v1.1)
+- ✓ **Hybrid Credential Persistence**: atomic cert persistence for restart recovery (v1.1)
+- ✓ **Resilient Vault Polling**: exponential backoff for downtime handling (v1.1)
+- ✓ **Unified Ingestion**: non-blocking FastAPI proxy with mTLS and signature verification (v1.1)
 
 ### Active
 
-*(Cleared for next milestone)*
+*(Cleared for next milestone - run /gsd-new-milestone)*
 
-## Current Milestone: v1.1 Sentinel Resilience & Auto-Restart Flow
+## Current Milestone: (Planning Next)
 
-**Goal:** Implement secure auto-restarts as a system service, transitioning from a pure memory-only model to a hybrid disk-cert / memory-key model, with manual approval required for prolonged downtimes.
-
-**Target features:**
-- Register the Sentinel binary as an auto-restarting system service.
-- Modify the Vault fetch logic: Persist the mTLS public certificate and CA certificate on disk, but keep the private key strictly in memory.
-- Auto-replace credentials on restart: Use the persisted mTLS cert to authenticate and request fresh secrets (new mTLS cert and private key).
-- Implement downtime enforcement: If the agent is down for more than `X` minutes, block automatic credential refresh on the backend.
-- Implement wait-for-approval polling: While blocked, Sentinel enters an exponential backoff loop, polling Vault for approval without spamming the network.
-
-
-### Out of Scope
-
-- [ ] Extending canary coverage to active PVC watchdogs and database tables — Deferred to a future milestone to focus purely on the core Sentinel-to-Kafka pipeline stability first.
+**Goal:** Expand canary mesh coverage and finalize the fleet management monitoring layer.
 
 ## Context
 
-Shipped v1.0 Milestone "Core Pipeline & Onboarding" with known gaps (requirements unmet). Restarting planning for the next milestone.
+<details>
+<summary><b>v1.1 Sentinel Resilience & Auto-Restart Flow (Shipped 2026-04-21)</b></summary>
+
+Successfully implemented secure auto-restarts as a system service, transitioned to a hybrid disk-cert / memory-key model, and unified all heartbeat and event telemetry through a horizontally scalable, non-blocking FastAPI proxy fronted by Nginx. All Sentinel agents are now decoupled from direct Kafka connections.
+</details>
+
+<details>
+<summary><b>v1.0 Core Pipeline & Onboarding (Shipped 2026-04-17)</b></summary>
+
+Established the base Sentinel-A agent, Vault integration, and Kafka event bus.
+</details>
 
 ## Constraints
 
-- **Security**: Zero-Disk — Secrets, TLS certs, and Vault tokens must never be written to the host disk.
-- **Resilience**: Fail-Closed — If the agent is compromised or disconnected, it must fail aggressively rather than operate in a degraded state.
+- **Security**: Zero-Disk — Secrets, sensitive keys, and Vault tokens must never be written to the host disk.
+- **Resilient Delivery**: Non-Blocking — Telemetry delivery must not impact agent performance or disk health (log-and-drop policy).
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Prioritize Sentinel A, Kafka, and Detection Engine | Establishes a hardened, production-ready backbone before attempting to expand canary mesh coverage | — Pending |
-
-## Evolution
-
-This document evolves at phase transitions and milestone boundaries.
-
-**After each phase transition** (via `/gsd-transition`):
-1. Requirements invalidated? → Move to Out of Scope with reason
-2. Requirements validated? → Move to Validated with phase reference
-3. New requirements emerged? → Add to Active
-4. Decisions to log? → Add to Key Decisions
-5. "What This Is" still accurate? → Update if drifted
-
-**After each milestone** (via `/gsd-complete-milestone`):
-1. Full review of all sections
-2. Core Value check — still the right priority?
-3. Audit Out of Scope — reasons still valid?
-4. Update Context with current state
+| Pivot to Unified Ingestion | Decouples agents from Kafka complexity and simplifies mTLS trust management at the load balancer level | ✅ v1.1 |
+| Log-and-Drop Policy | Prioritizes system stability and memory safety over event persistence during upstream outages | ✅ v1.1 |
 
 ---
-*Last updated: 2026-04-17 after v1.0 milestone*
+*Last updated: 2026-04-21 after v1.1 milestone*

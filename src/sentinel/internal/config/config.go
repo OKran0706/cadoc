@@ -63,6 +63,7 @@ type WatchdogConfig struct {
 	HeartbeatIntervalSeconds int    `yaml:"heartbeat_interval_seconds"`
 	AlertThresholdSeconds    int    `yaml:"alert_threshold_seconds"`
 	PeerSocket               string `yaml:"peer_socket"`
+	IngestionURL             string `yaml:"ingestion_url"`
 }
 
 // LogIntegrityConfig configures the local Merkle chain log.

@@ -3,7 +3,7 @@
 ## Milestones
 
 - ✅ **v1.0 Core Pipeline & Onboarding** — Phases 1-3 (shipped 2026-04-17)
-- 🚧 **v1.1 Sentinel Resilience & Auto-Restart Flow** — Phases 4-6 (in progress)
+- ✅ **v1.1 Sentinel Resilience & Auto-Restart Flow** — Phases 4-8 (shipped 2026-04-21)
 
 ## Phases
 
@@ -16,22 +16,8 @@
 
 </details>
 
-## Milestone: v1.1 — Sentinel Resilience & Auto-Restart Flow (In Progress)
+- ✅ **v1.1 Sentinel Resilience & Auto-Restart Flow** — Phases 4-8 (shipped 2026-04-21) [Archive](file:///c:/Users/Karan/Desktop/canary/cadoc/.planning/milestones/v1.1-ROADMAP.md)
 
-### Phase 4: Service Daemonization
-**Goal:** Wrap Sentinel in a robust systemd service that enforces file sandboxing.
-**Requirements:** SRV-01, SRV-02
-- [x] **4-01**: Service unit testing — completed 2026-04-17
-
-### Phase 5: Hybrid Credential Persistence
-**Goal:** Implement fallback auto-reauthentication using persistent public certs while keeping private keys zero-disk.
-**Requirements:** AUTH-01, AUTH-02, AUTH-03
-- [x] **5-01**: Credential persistence logic — completed 2026-04-17
-
-### Phase 6: Resilient Vault Polling
-**Goal:** Implement exponential backoff for manual downtime blocks from Vault.
-**Requirements:** VAULT-01, VAULT-02, VAULT-03
-- [ ] **6-01**: Backoff fetch logic
 
 ## Progress
 
@@ -42,5 +28,6 @@
 | 3. Fail-Closed Resiliency | v1.0 | 0/0 | Complete | 2026-04-17 |
 | 4. Service Daemonization | v1.1 | 1/1 | Complete | 2026-04-17 |
 | 5. Hybrid Credential Persistence | v1.1 | 1/1 | Complete | 2026-04-17 |
-| 6. Resilient Vault Polling | v1.1 | 0/1 | Not started | - |
-
+| 6. Resilient Vault Polling | v1.1 | 1/1 | Complete | 2026-04-21 |
+| 7. Backend Ingestion & Liveness Service | v1.1 | 3/3 | Complete | 2026-04-21 |
+| 8. Milestone v1.1 Audit Closure | v1.1 | 1/1 | Complete | 2026-04-21 |

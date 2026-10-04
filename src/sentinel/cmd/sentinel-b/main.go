@@ -7,8 +7,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -16,18 +14,16 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/your-org/canary/sentinel/internal/config"
 	"github.com/your-org/canary/sentinel/internal/heartbeat"
+	"github.com/your-org/canary/sentinel/internal/ingestclient"
 	"github.com/your-org/canary/sentinel/internal/signer"
 	"github.com/your-org/canary/sentinel/internal/sysutil"
 	"github.com/your-org/canary/sentinel/internal/vault"
-
-	"github.com/segmentio/kafka-go"
 )
 
 func main() {
@@ -62,10 +58,6 @@ func main() {
 		log.Fatalf("Failed to load TLS config: %v", err)
 	}
 
-	kafkaTransport := &kafka.Transport{
-		TLS: tlsConfig,
-	}
-
 	// 1. Runtime Binary Verification
 	if expected, actual, err := sysutil.VerifySelfIntegrity("sentinel-b"); err != nil {
 		payload := map[string]interface{}{
@@ -96,15 +88,10 @@ func main() {
 	// Write PID file
 	os.WriteFile("/run/canary/sentinel-b.pid", []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
 
-	writer := &kafka.Writer{
-		Addr:      kafka.TCP(cfg.Telemetry.KafkaBrokers...),
-		Topic:     cfg.Telemetry.Topic,
-		Balancer:  &kafka.LeastBytes{},
-		Transport: kafkaTransport,
-	}
-	defer writer.Close()
+	// 2. Initialize Ingestion Client
+	ic := ingestclient.New(cfg.Watchdog.IngestionURL, tlsConfig)
 
-	// 2. Drop capabilities
+	// 3. Drop capabilities
 	if err := sysutil.DropCapabilitiesAfterInit(); err != nil {
 		log.Fatalf("Failed to drop capabilities: %v", err)
 	}
@@ -148,7 +135,7 @@ func main() {
 		}
 	}()
 
-	// Emit sentinel-b heartbeats to Kafka
+	// Emit sentinel-b heartbeats to Ingestion Service
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -161,12 +148,16 @@ func main() {
 				return
 			case <-ticker.C:
 				event := map[string]interface{}{
-					"type":           "HEARTBEAT",
+					"type":           "SENTINEL_HEARTBEAT",
 					"source_process": "sentinel-b",
+					"id":             "sentinel-b",
+					"ts":             time.Now().UTC().Format(time.RFC3339Nano),
 				}
 				envelope, _ := s.SignEvent(event)
 				payload, _ := signer.MarshalEnvelope(envelope)
-				writer.WriteMessages(ctx, kafka.Message{Value: payload})
+				if err := ic.Post(ctx, payload); err != nil {
+					log.Printf("Failed to emit heartbeat: %v", err)
+				}
 			}
 		}
 	}()
