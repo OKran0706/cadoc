@@ -18,7 +18,6 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -33,17 +32,12 @@ import (
 	"github.com/your-org/canary/sentinel/internal/auditmon" // 11.05: Added auditmon
 )
 
-// authorizedShutdown is set to 1 when a valid maintenance ticket has been processed.
-// SIGTERM/SIGINT handlers check this to decide whether shutdown is authorized.
-var authorizedShutdown int32
 
 func main() {
 	devMode := flag.Bool("dev", false, "Run in development mode (skips auth/ingestion bootstrap)")
 	configPath := flag.String("config", "/opt/sentinel/config/sentinel.yaml", "Path to sentinel config")
 	joinToken := flag.String("join-token", "", "Initial vault bootstrap token")
 	testSign := flag.Bool("test-sign", false, "Sign a test event and exit")
-	authTicketJSON := flag.String("auth-ticket-json", "", "Raw JSON string of the signed authorization ticket for maintenance")
-	authAction := flag.String("action", "", "Action to authorize: SHUTDOWN, REDEPLOY, DEREGISTER, KILLSWITCH_ACTIVATE")
 
 	// Canary Deployer subsystem flags
 	deployerProfile := flag.String("deployer-profile", "", "Canary profile (app-server, db-server, etc.)")
@@ -180,9 +174,9 @@ func main() {
 	var ticketVerifier *auth.Verifier
 	if !*devMode {
 		log.Printf("Fetching maintenance pubkey from Vault: %s field=%s",
-			cfg.Maintenance.VaultPath, cfg.Maintenance.VaultField)
+			cfg.Watchdog.MaintenanceVaultPath, cfg.Watchdog.MaintenanceVaultField)
 		
-		pubKeyStr, err := vaultClient.GetSecretField(cfg.Maintenance.VaultPath, cfg.Maintenance.VaultField)
+		pubKeyStr, err := vaultClient.GetSecretField(cfg.Watchdog.MaintenanceVaultPath, cfg.Watchdog.MaintenanceVaultField)
 		if err != nil {
 			log.Printf("Warning: failed to fetch maintenance pubkey from Vault: %v — ticket auth disabled", err)
 		} else {
@@ -198,10 +192,6 @@ func main() {
 		log.Println("[DEV] Skipping maintenance pubkey fetch (Vault disabled in dev)")
 	}
 
-	// Handle --auth-ticket-json: process a maintenance ticket before normal startup
-	if *authTicketJSON != "" {
-		processMaintenanceTicket(context.Background(), *authTicketJSON, *authAction, ticketVerifier, s, ic, cfg)
-	}
 
 	// Fail closed: verify Ingestion LB is reachable before starting (Skip in dev)
 	if !*devMode {
@@ -347,28 +337,7 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	sig := <-sigCh
 
-	// Check if shutdown was authorized via a signed ticket
-	if atomic.LoadInt32(&authorizedShutdown) == 0 {
-		// UNAUTHORIZED shutdown — emit P1 alert before dying
-		log.Printf("UNAUTHORIZED SHUTDOWN DETECTED: signal=%v", sig)
-		unauthorizedEvent := map[string]interface{}{
-			"type":   "UNAUTHORIZED_SHUTDOWN",
-			"signal": sig.String(),
-		}
-		env, _ := s.SignEvent(unauthorizedEvent)
-		p, _ := signer.MarshalEnvelope(env)
-		// Try to emit before dying (best effort)
-		_ = ic.Post(context.Background(), p)
-
-		// Also send OOB alert (bypasses Kafka in case Kafka is compromised)
-		sendOOBAlert(cfg.OOBAlert.URL, map[string]interface{}{
-			"type":   "UNAUTHORIZED_SHUTDOWN",
-			"signal": sig.String(),
-			"host":   os.Getenv("HOSTNAME"),
-		})
-	} else {
-		log.Println("Authorized shutdown — exiting cleanly")
-	}
+	log.Printf("Shutting down (signal: %v)", sig)
 
 	cancel()
 	wg.Wait()
@@ -434,7 +403,6 @@ func pollKillSwitch(ctx context.Context, cfg *config.Config, s *signer.Signer, i
 			}
 
 			log.Printf("Kill switch AUTHORIZED: issuer=%s nonce=%s", ticket.Issuer, ticket.Nonce)
-			atomic.StoreInt32(&authorizedShutdown, 1)
 
 
 			// 2. Start inotify fallback (If systemd available)
@@ -506,51 +474,4 @@ func sendOOBAlert(url string, payload map[string]interface{}) {
 	}
 }
 
-func processMaintenanceTicket(ctx context.Context, ticketJSONStr, actionStr string, verifier *auth.Verifier, s *signer.Signer, ic *ingestclient.Client, cfg *config.Config) {
-	if verifier == nil {
-		log.Fatal("Cannot process auth ticket: maintenance verifier not initialized")
-	}
-	if actionStr == "" {
-		log.Fatal("--action is required when using --auth-ticket-json")
-	}
-	ticket, err := verifier.VerifyFromJSON([]byte(ticketJSONStr), auth.Action(actionStr))
-	if err != nil {
-		log.Fatalf("AUTH TICKET REJECTED: %v", err)
-	}
-	log.Printf("AUTH TICKET ACCEPTED: action=%s target=%s issuer=%s",
-		ticket.Action, ticket.Target, ticket.Issuer)
-
-	// 1. Mark shutdown/lifecycle operation as authorized
-	atomic.StoreInt32(&authorizedShutdown, 1)
-
-	// 2. Write a run-file so monitoring systems know maintenance is active
-	maintFile := "/run/canary/maintenance.active"
-	maintData, _ := json.Marshal(map[string]string{
-		"action": string(ticket.Action),
-		"exp":    ticket.ExpiresAt,
-		"issuer": ticket.Issuer,
-	})
-	_ = os.WriteFile(maintFile, maintData, 0644)
-
-	// 3. Emit MAINTENANCE_AUTHORIZED event to Ingestion Service
-	maintEvent := map[string]interface{}{
-		"type":   "MAINTENANCE_AUTHORIZED",
-		"action": string(ticket.Action),
-		"issuer": ticket.Issuer,
-		"nonce":  ticket.Nonce,
-	}
-	authEnvelope, _ := s.SignEvent(maintEvent)
-	authPayload, _ := signer.MarshalEnvelope(authEnvelope)
-
-	// Must emit before proceeding/exiting
-	if err := ic.Post(context.Background(), authPayload); err != nil {
-		log.Printf("Failed to emit maintenance authorization: %v", err)
-	}
-
-	if auth.Action(actionStr) == auth.ActionShutdown || auth.Action(actionStr) == auth.ActionDeregister {
-		log.Printf("Authorized %s — exiting cleanly", actionStr)
-		os.Exit(0)
-	}
-	// For REDEPLOY or other ongoing maintenance, control returns to main()
-}
 

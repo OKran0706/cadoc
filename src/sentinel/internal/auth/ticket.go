@@ -23,11 +23,7 @@ import (
 type Action string
 
 const (
-	ActionDeploy     Action = "DEPLOY"
-	ActionRedeploy   Action = "REDEPLOY"
-	ActionShutdown   Action = "SHUTDOWN"
 	ActionKillSwitch Action = "KILLSWITCH_ACTIVATE"
-	ActionDeregister Action = "DEREGISTER"
 )
 
 // DefaultMaxTicketAge is the maximum allowed age for a ticket.
