@@ -26,18 +26,18 @@
 ## Traceability
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
-| BOOT-01 | | |
-| BOOT-02 | | |
-| BOOT-03 | | |
-| BOOT-04 | | |
-| BOOT-05 | | |
-| SEC-01 | | |
-| SEC-02 | | |
-| SEC-03 | | |
-| SEC-04 | | |
-| ERR-01 | | |
-| ERR-02 | | |
-| ERR-03 | | |
-| ERR-04 | | |
-| RES-01 | | |
-| RES-02 | | |
+| BOOT-01 | 14 | Pending |
+| BOOT-02 | 14 | Pending |
+| BOOT-03 | 17 | Pending |
+| BOOT-04 | 17 | Pending |
+| BOOT-05 | 14 | Pending |
+| SEC-01 | 16 | Pending |
+| SEC-02 | 16 | Pending |
+| SEC-03 | 16 | Pending |
+| SEC-04 | 16 | Pending |
+| ERR-01 | 15 | Pending |
+| ERR-02 | 15 | Pending |
+| ERR-03 | 15 | Pending |
+| ERR-04 | 15 | Pending |
+| RES-01 | 17 | Pending |
+| RES-02 | 17 | Pending |
