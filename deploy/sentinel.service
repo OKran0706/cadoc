@@ -1,21 +1,22 @@
 [Unit]
 Description=Canary Sentinel Daemon
 Documentation=https://github.com/OKran0706/cadoc
-After=network-online.target
+After=network-online.target auditd.service
 Wants=network-online.target
 
 [Service]
-Type=simple
+ExecStartPre=/usr/bin/mkdir -p /run/canary
+ExecStartPre=/usr/bin/chmod 700 /run/canary
 ExecStart=/opt/canary/sentinel
 Restart=always
 RestartSec=10
 
 # --- Capability Bounding ---
 # Run as root but drop all capabilities except those required for
-# eBPF telemetry (CAP_SYS_RESOURCE) and
-# network egress to Kafka (CAP_NET_ADMIN).
-CapabilityBoundingSet=CAP_SYS_RESOURCE CAP_NET_ADMIN
-AmbientCapabilities=CAP_SYS_RESOURCE CAP_NET_ADMIN
+# Audit control (CAP_AUDIT_CONTROL) and
+# network egress to Ingestion (CAP_NET_ADMIN).
+CapabilityBoundingSet=CAP_AUDIT_CONTROL CAP_NET_ADMIN
+AmbientCapabilities=CAP_AUDIT_CONTROL CAP_NET_ADMIN
 
 # --- Filesystem Sandboxing ---
 # Protect system binaries (/usr, /boot) from modification but allow
