@@ -10,6 +10,7 @@ Asymmetric cost: It must be cheap for an admin to deploy, but extremely expensiv
 
 ## Current State
 
+- **Milestone v1.4 Active**: Sentinel-A hardening, graceful shutdown, and structured error handling.
 - **Milestone v1.3 Shipped (2026-04-22)**: Zero-dependency Auditd-only architecture with live rule injection and resilient IPC.
 - **Milestone v1.2 Shipped (2026-04-21)**: Unified telemetry pipeline with horizontal ingestion scaling and mTLS verification.
 - **Milestone v1.1 Shipped (2026-04-21)**: Sentinel-A daemonized with hybrid credential persistence and resilient Vault polling.
@@ -23,12 +24,14 @@ Asymmetric cost: It must be cheap for an admin to deploy, but extremely expensiv
 - ✓ Live Auditctl rule injection (Zero-Disk) — v1.3
 - ✓ Resilient IPC with exponential backoff — v1.3
 - ✓ Subsystem liveness monitoring — v1.3
-- ✓ mTLS Ingestion Scaling — v1.2
-- ✓ Hybrid Credential Model — v1.1
-- ✓ systemd Service Integration — v1.1
 
 ### Active
 
+- [ ] **v1.4: Sentinel Hardening & Refactoring**
+  - [ ] Graceful shutdown and goroutine lifecycle management
+  - [ ] Structured Vault error handling and strict error checking
+  - [ ] Shared HTTP client with context support
+  - [ ] Capability drop order and privileged op audit
 - [ ] Automated Canary Placement (Policy Engine)
 - [ ] Multi-Tenant Ingestion Isolation
 - [ ] Hardware-backed Key Storage (TPM 2.0 Integration)
