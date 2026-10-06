@@ -1,0 +1,7 @@
+go 1.26
+
+use (
+	./src/pvc_watchdog
+	./src/sentinel
+	./src/telemetry
+)

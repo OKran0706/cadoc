@@ -53,7 +53,7 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	tlsConfig, err := sysutil.LoadTLSConfig(cfg.Telemetry, vaultClient)
+	tlsConfig, _, _, err := sysutil.LoadTLSConfig(cfg.Telemetry, vaultClient, *joinToken == "")
 	if err != nil {
 		log.Fatalf("Failed to load TLS config: %v", err)
 	}
@@ -75,7 +75,7 @@ func main() {
 		log.Fatalf("Integrity verification failed: %v", err)
 	}
 
-	s, err := signer.New(cfg.Signing)
+	s, err := signer.New(cfg.Signing, vaultClient)
 	if err != nil {
 		log.Fatalf("Failed to initialize signer: %v", err)
 	}

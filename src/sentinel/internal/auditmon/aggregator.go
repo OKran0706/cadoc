@@ -33,7 +33,9 @@ type AuditEvent struct {
 	Comm       string                 `json:"comm"`
 	Exe        string                 `json:"exe"`
 	Path       string                 `json:"path"`
+	DestPath   string                 `json:"dest_path,omitempty"`
 	CWD        string                 `json:"cwd"`
+	Op         string                 `json:"op"`         // e.g. READ, WRITE, RENAME, DELETE
 	Confidence Confidence             `json:"confidence"`
 	RawRecords []map[string]string    `json:"-"` // Hidden from JSON by default
 }
@@ -115,8 +117,24 @@ func (a *Aggregator) ProcessRecord(rec *auparse.AuditMessage) {
 
 	buf.lastUpdate = time.Now()
 
+	// Fallback for record type if it's missing (e.g. from manual test feeds)
+	recType := rec.RecordType
+	if recType == 0 {
+		typeStr := extractField(rec.RawData, "type")
+		switch typeStr {
+		case "SYSCALL":
+			recType = 1300
+		case "PATH":
+			recType = 1302
+		case "CWD":
+			recType = 1307
+		case "PROCTITLE":
+			recType = 1323
+		}
+	}
+
 	// Categorize the record by its Type (uint16)
-	switch rec.RecordType {
+	switch recType {
 	case 1300: // AUDIT_SYSCALL
 		buf.syscall = rec
 	case 1302: // AUDIT_PATH
@@ -158,11 +176,15 @@ func (a *Aggregator) isComplete(buf *eventBuffer) bool {
 	}
 
 	// 13.2.3: Worker-side filtering
-	// Check if the path is in our Canary Map
-	path := extractString(buf.paths[0], "name")
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.canaryMap[path]
+	// Check if any of the paths are in our Canary Map
+	for _, pRec := range buf.paths {
+		path := strings.Trim(extractString(pRec, "name"), "\"")
+		if a.canaryMap[path] {
+			return true
+		}
+	}
+	
+	return false
 }
 
 func (a *Aggregator) emit(key string) {
@@ -186,11 +208,20 @@ func (a *Aggregator) emit(key string) {
 		event.Exe = extractString(buf.syscall, "exe")
 		// Extract PID from SYSCALL data manually
 		event.PID = extractInt(buf.syscall, "pid")
+		event.Op = identifyOp(extractInt(buf.syscall, "syscall"))
 	}
 
-	// 2. Extract from PATH record (usually the most important for canary)
+	// 2. Extract from PATH records
 	if len(buf.paths) > 0 {
-		event.Path = extractString(buf.paths[0], "name")
+		// Usually index 0 or last index depending on syscall.
+		// For rename: index 2 is source, index 3 is dest.
+		if event.Op == "RENAME" && len(buf.paths) >= 4 {
+			event.Path = extractString(buf.paths[2], "name")
+			event.DestPath = extractString(buf.paths[3], "name")
+		} else {
+			// Fallback to the first path that matches or just the first path
+			event.Path = extractString(buf.paths[len(buf.paths)-1], "name")
+		}
 	}
 
 	// 3. Extract CWD
@@ -218,35 +249,65 @@ func (a *Aggregator) janitor() {
 
 func (a *Aggregator) checkTimeouts() {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	now := time.Now()
+	var toEmit []string
 	for key, buf := range a.buffers {
 		if now.Sub(buf.lastUpdate) > a.timeout {
-			log.Printf("[auditmon] Timeout for event %s (Partial Emission)", key)
-			a.emitPartial(key)
+			toEmit = append(toEmit, key)
 		}
+	}
+	a.mu.Unlock()
+
+	for _, key := range toEmit {
+		log.Printf("[auditmon] Timeout for event %s (Partial Emission)", key)
+		a.emitPartial(key)
 	}
 }
 
 func (a *Aggregator) emitPartial(key string) {
 	a.mu.Lock()
 	buf, ok := a.buffers[key]
-	a.mu.Unlock()
 	if !ok {
+		a.mu.Unlock()
 		return
 	}
 	delete(a.buffers, key)
+	a.mu.Unlock()
+
+	// C-02: Gate partial events on canaryMap — same requirement as isComplete().
+	if len(buf.paths) == 0 {
+		return
+	}
 	
+	var path string
+	found := false
+	a.mu.Lock()
+	for _, pRec := range buf.paths {
+		p := strings.Trim(extractString(pRec, "name"), "\"")
+		if a.canaryMap[p] {
+			path = p
+			found = true
+			break
+		}
+	}
+	a.mu.Unlock()
+	
+	if !found {
+		return
+	}
+
 	event := &AuditEvent{
 		ID:         buf.id,
 		Timestamp:  buf.ts,
 		PID:        buf.pid,
 		Confidence: ConfIncomplete,
+		Path:       path,
 	}
 	if buf.syscall != nil {
 		event.UID = extractInt(buf.syscall, "uid")
 		event.Comm = extractString(buf.syscall, "comm")
+		event.Exe = extractString(buf.syscall, "exe")
+		event.Op = identifyOp(extractInt(buf.syscall, "syscall"))
 	}
 	a.emitChan <- event
 }
@@ -304,4 +365,29 @@ func (a *Aggregator) evictOldest() {
 // Events returns the channel for completed audit events.
 func (a *Aggregator) Events() <-chan *AuditEvent {
 	return a.emitChan
+}
+
+// identifyOp maps a syscall number to a high-level operation name.
+// These are standard x86_64 syscall numbers.
+func identifyOp(sys int) string {
+	switch sys {
+	case 0, 17, 19: // read, pread64, readv
+		return "READ"
+	case 2, 257: // open, openat
+		return "OPEN"
+	case 1, 18, 20: // write, pwrite64, writev
+		return "WRITE"
+	case 82, 264, 316: // rename, renameat, renameat2
+		return "RENAME"
+	case 87, 263: // unlink, unlinkat
+		return "DELETE"
+	case 90, 91, 268: // chmod, fchmod, fchmodat
+		return "CHMOD"
+	case 92, 93, 94: // chown, fchown, lchown
+		return "CHOWN"
+	case 76, 77, 265, 266: // truncate, ftruncate
+		return "TRUNCATE"
+	default:
+		return "OTHER"
+	}
 }

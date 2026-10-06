@@ -40,9 +40,13 @@ func (e Environment) String() string {
 // strategy is available.
 func DetectEnvironment() Environment {
 	// 1. Check for native Auditd:
-	//    The audit dispatcher directory exists (implies audispd is present)
+	//    The audit dispatcher directory exists (implies audispd/auditd plugins are present)
+	if _, err := os.Stat("/etc/audit/plugins.d"); err == nil {
+		log.Println("[selfmon] Detected environment: Native Auditd (plugins.d)")
+		return EnvAuditd
+	}
 	if _, err := os.Stat("/etc/audisp/plugins.d"); err == nil {
-		log.Println("[selfmon] Detected environment: Native Auditd (audispd)")
+		log.Println("[selfmon] Detected environment: Legacy Auditd (audispd)")
 		return EnvAuditd
 	}
 
@@ -62,8 +66,12 @@ func Start(ctx context.Context, selfPID int, s *signer.Signer, ic *ingestclient.
 		"monitoring_mode": env.String(),
 		"pid":             selfPID,
 	}
-	envelope, _ := s.SignEvent(modeEvent)
-	if payload, err := signer.MarshalEnvelope(envelope); err == nil {
+	envelope, _, err := s.SignEvent(modeEvent)
+	if err != nil {
+		log.Printf("[selfmon] Failed to sign mode-selection event: %v", err)
+	} else if payload, err := signer.MarshalEnvelope(envelope); err != nil {
+		log.Printf("[selfmon] Failed to marshal mode-selection envelope: %v", err)
+	} else {
 		ic.Post(ctx, payload)
 	}
 
@@ -77,9 +85,14 @@ func Start(ctx context.Context, selfPID int, s *signer.Signer, ic *ingestclient.
 				"details": details,
 				"ts":      time.Now().UTC().Format(time.RFC3339Nano),
 			}
-			env, _ := s.SignEvent(evt)
-			pay, _ := signer.MarshalEnvelope(env)
-			ic.Post(ctx, pay)
+			envelope, _, err := s.SignEvent(evt)
+			if err != nil {
+				log.Printf("[selfmon] Failed to sign subsystem event: %v", err)
+			} else if pay, err := signer.MarshalEnvelope(envelope); err != nil {
+				log.Printf("[selfmon] Failed to marshal subsystem event: %v", err)
+			} else {
+				ic.Post(ctx, pay)
+			}
 		})
 		return nil
 	default:
@@ -110,9 +123,12 @@ func PollProc(ctx context.Context, selfPID int, s *signer.Signer, ic *ingestclie
 					"expected_cmd": expectedCmdline,
 					"current_cmd":  currentCmdline,
 				}
-				envelope, _ := s.SignEvent(event)
-				payload, _ := signer.MarshalEnvelope(envelope)
-				if err := ic.Post(ctx, payload); err != nil {
+				envelope, _, err := s.SignEvent(event)
+				if err != nil {
+					log.Printf("[selfmon] Failed to sign tamper alert: %v", err)
+				} else if payload, err := signer.MarshalEnvelope(envelope); err != nil {
+					log.Printf("[selfmon] Failed to marshal tamper alert: %v", err)
+				} else if err := ic.Post(ctx, payload); err != nil {
 					log.Printf("[selfmon] Failed to emit tamper alert: %v", err)
 				}
 				log.Printf("[selfmon] SENTINEL_TAMPER: cmdline changed for PID %d", selfPID)
@@ -126,9 +142,12 @@ func PollProc(ctx context.Context, selfPID int, s *signer.Signer, ic *ingestclie
 					"target_pid": selfPID,
 					"tracer_pid": tracerPID,
 				}
-				envelope, _ := s.SignEvent(event)
-				payload, _ := signer.MarshalEnvelope(envelope)
-				if err := ic.Post(ctx, payload); err != nil {
+				envelope, _, err := s.SignEvent(event)
+				if err != nil {
+					log.Printf("[selfmon] Failed to sign ptrace alert: %v", err)
+				} else if payload, err := signer.MarshalEnvelope(envelope); err != nil {
+					log.Printf("[selfmon] Failed to marshal ptrace alert: %v", err)
+				} else if err := ic.Post(ctx, payload); err != nil {
 					log.Printf("[selfmon] Failed to emit ptrace alert: %v", err)
 				}
 				log.Printf("[selfmon] SENTINEL_PTRACE: PID %d being traced by PID %d", selfPID, tracerPID)

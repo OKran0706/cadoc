@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,7 +84,14 @@ func (td TemplateData) RandomHex(n int) string {
 // FakeSSHKeyBody returns a base64 block resembling an SSH private key body.
 func (td TemplateData) FakeSSHKeyBody() string {
 	buf := make([]byte, 256)
-	rand.Read(buf)
+	if _, err := rand.Read(buf); err != nil {
+		log.Printf("[deployer] WARNING: rand.Read failed in FakeSSHKeyBody: %v. Using time-based seed.", err)
+		// Fallback: fill with something non-zero if rand fails
+		now := time.Now().UnixNano()
+		for i := 0; i < len(buf); i++ {
+			buf[i] = byte(now >> (i % 8 * 8))
+		}
+	}
 	return base64.StdEncoding.EncodeToString(buf)
 }
 
@@ -105,7 +113,10 @@ func LoadProfile(configDir, profileName string) (*Profile, error) {
 
 // DetectProfile determines the server profile from hostname patterns.
 func DetectProfile(configDir string) (string, error) {
-	hostname, _ := os.Hostname()
+	hostname, err := os.Hostname()
+	if err != nil {
+		return "app-server", fmt.Errorf("detect profile: os.Hostname(): %w", err)
+	}
 	h := strings.ToLower(hostname)
 
 	switch {
@@ -156,7 +167,9 @@ func Deploy(profile *Profile, templateDir string, dryRun bool) ([]CanaryEntry, e
 			}
 
 			// Ensure target directory exists
-			os.MkdirAll(target.Path, 0755)
+			if err := os.MkdirAll(target.Path, 0755); err != nil {
+				return nil, fmt.Errorf("create target directory %s: %w", target.Path, err)
+			}
 
 			// Render template
 			content, err := renderTemplate(tmplPath, data)
@@ -229,7 +242,11 @@ func generateFilename(canaryType, dir string) string {
 
 	// Pick a random name from the list
 	b := make([]byte, 1)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to time-based selection if rand fails
+		idx := time.Now().UnixNano() % int64(len(names))
+		return names[idx]
+	}
 	return names[int(b[0])%len(names)]
 }
 
@@ -260,14 +277,20 @@ func blendTimestamp(canaryPath, dir string) {
 		if err != nil {
 			continue
 		}
-		// Use neighbor's modification time
-		os.Chtimes(canaryPath, info.ModTime(), info.ModTime())
+		if err := os.Chtimes(canaryPath, info.ModTime(), info.ModTime()); err != nil {
+			// Non-fatal: blending is a best-effort operation.
+			// Log and continue — canary will still be active.
+			log.Printf("[deployer] blendTimestamp: chtimes %s: %v", canaryPath, err)
+		}
 		return
 	}
 }
 
 func getBlendedMtime(dir string) string {
-	entries, _ := os.ReadDir(dir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
 	for _, e := range entries {
 		if e.IsDir() {
 			continue

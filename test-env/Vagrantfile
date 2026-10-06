@@ -1,0 +1,20 @@
+Vagrant.configure("2") do |config|
+  config.vm.box = "ubuntu/jammy64"
+  config.vm.hostname = "sentinel-vm"
+  
+  # Private network for host-VM communication
+  config.vm.network "private_network", ip: "192.168.56.10"
+
+  config.vm.provider "virtualbox" do |vb|
+    vb.memory = "1024"
+    vb.cpus = 2
+  end
+
+  # Provision the VM with our setup script
+  config.vm.provision "shell", path: "setup-vm.sh"
+
+  # Sync scripts and templates from project root
+  config.vm.synced_folder "../scripts", "/opt/sentinel/scripts"
+  config.vm.synced_folder "../src/sentinel/templates", "/opt/sentinel/templates"
+  config.vm.synced_folder "../bin", "/opt/sentinel/bin"
+end

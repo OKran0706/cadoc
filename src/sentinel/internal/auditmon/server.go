@@ -6,6 +6,7 @@ package auditmon
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"strings"
@@ -14,8 +15,9 @@ import (
 )
 
 var (
-	workersMu sync.Mutex
-	workers   = make(map[net.Conn]bool)
+	workersMu     sync.Mutex
+	workers       = make(map[net.Conn]bool)
+	currentMapMsg string // H-01: cached latest SET_MAP for replay on reconnect
 )
 
 // StartServer listens on a Unix socket for events forwarded by the audit consumer plugin.
@@ -41,6 +43,18 @@ func StartServer(ctx context.Context, socketPath string, handler func(event *Aud
 			}
 			workersMu.Lock()
 			workers[conn] = true
+			// H-01: Replay current canary map to newly connected worker immediately.
+			if currentMapMsg != "" {
+				payload := []byte(currentMapMsg + "\n")
+				if _, err := conn.Write(payload); err != nil {
+					log.Printf("[auditmon] Failed to replay map to new worker: %v", err)
+					conn.Close()
+					delete(workers, conn)
+					workersMu.Unlock()
+					continue
+				}
+				log.Printf("[auditmon] Replayed canary map to new worker (%d bytes)", len(payload))
+			}
 			workersMu.Unlock()
 			go handleConnection(ctx, conn, handler)
 		}
@@ -51,10 +65,16 @@ func StartServer(ctx context.Context, socketPath string, handler func(event *Aud
 }
 
 // BroadcastControlMessage sends a control command to all connected workers.
+// For SET_MAP messages, the message is also cached for replay on new connections.
 func BroadcastControlMessage(msg string) {
 	workersMu.Lock()
 	defer workersMu.Unlock()
-	
+
+	// H-01: Cache SET_MAP for replay on new connections.
+	if strings.HasPrefix(msg, "SET_MAP ") {
+		currentMapMsg = msg
+	}
+
 	payload := []byte(msg + "\n")
 	for conn := range workers {
 		_, err := conn.Write(payload)
@@ -67,25 +87,36 @@ func BroadcastControlMessage(msg string) {
 }
 
 func handleConnection(ctx context.Context, conn net.Conn, handler func(event *AuditEvent)) {
+	log.Printf("[auditmon-debug] New connection from consumer: %v", conn.RemoteAddr())
 	defer conn.Close()
 	scanner := bufio.NewScanner(conn)
 	for scanner.Scan() {
 		line := scanner.Text()
+		log.Printf("[auditmon-debug] Raw IPC line: %q", line)
 		if line == "" {
 			continue
 		}
 
-		// Simple protocol for now: EVENT <ID> <CONFIDENCE> <PID> <PATH>
-		parts := strings.SplitN(line, " ", 5)
-		if len(parts) < 5 || parts[0] != "EVENT" {
+		// Simple protocol for now: EVENT <ID> <CONFIDENCE> <PID> <PATH> <OP> [DESTPATH]
+		parts := strings.SplitN(line, " ", 7)
+		if len(parts) < 4 || parts[0] != "EVENT" {
 			continue
 		}
 
 		event := &AuditEvent{
 			ID:         parts[1],
 			Confidence: Confidence(parts[2]),
-			PID:        0, // Parse from parts[3]
-			Path:       parts[4],
+		}
+		fmt.Sscanf(parts[3], "%d", &event.PID)
+
+		if len(parts) >= 5 {
+			event.Path = parts[4]
+		}
+		if len(parts) >= 6 {
+			event.Op = parts[5]
+		}
+		if len(parts) >= 7 {
+			event.DestPath = parts[6]
 		}
 		
 		handler(event)

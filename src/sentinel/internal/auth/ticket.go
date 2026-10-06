@@ -51,11 +51,12 @@ type SignedTicket struct {
 // Verifier validates signed authorization tickets.
 // The public key is held in memory only — never written to disk.
 type Verifier struct {
-	pubKey     ed25519.PublicKey
-	keyID      string
-	hostname   string
-	usedNonces map[string]time.Time
-	mu         sync.RWMutex
+	pubKey       ed25519.PublicKey
+	keyID        string
+	hostname     string
+	usedNonces   map[string]time.Time
+	mu           sync.RWMutex
+	lastCleanup  time.Time // tracks when nonce GC last ran
 }
 
 // NewVerifierFromBytes creates a Verifier from raw Ed25519 public key bytes.
@@ -73,13 +74,17 @@ func NewVerifierFromBytes(pubKeyBytes []byte) (*Verifier, error) {
 	fpHash := sha256.Sum256(pubKey)
 	keyID := hex.EncodeToString(fpHash[:8])
 
-	hostname, _ := os.Hostname()
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "unknown"
+	}
 
 	return &Verifier{
-		pubKey:     pubKey,
-		keyID:      keyID,
-		hostname:   hostname,
-		usedNonces: make(map[string]time.Time),
+		pubKey:      pubKey,
+		keyID:       keyID,
+		hostname:    hostname,
+		usedNonces:  make(map[string]time.Time),
+		lastCleanup: time.Now(),
 	}, nil
 }
 
@@ -154,8 +159,9 @@ func (v *Verifier) Verify(signed *SignedTicket, expectedAction Action) (*Ticket,
 	v.usedNonces[ticket.Nonce] = time.Now()
 	v.mu.Unlock()
 
-	// 8. Occasional cleanup (roughly every 100 verifications)
-	if time.Now().Unix()%100 == 0 {
+	// 8. Periodic nonce GC — run at most once every 5 minutes to bound memory growth.
+	if time.Since(v.lastCleanup) > 5*time.Minute {
+		v.lastCleanup = time.Now()
 		v.cleanupNonces()
 	}
 

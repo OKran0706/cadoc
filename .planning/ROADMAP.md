@@ -2,7 +2,7 @@
 
 ## Milestones
 
-- 🟡 **v1.4 Sentinel Hardening** — Phases 14-17 (target: 2026-04-25)
+- 🟡 **v1.4 Sentinel Hardening** — Phases 14-18 (target: 2026-04-25)
 - ✅ **v1.3 Auditd Transition** — Phases 11-13 (shipped 2026-04-22)
 - ✅ **v1.2 Unified Ingestion** — Phases 8-10 (shipped 2026-04-21)
 - ✅ **v1.1 Sentinel Resilience** — Phases 5-7 (shipped 2026-04-21)
@@ -11,7 +11,7 @@
 ## Phases
 
 <details open>
-<summary>🟡 v1.4 Sentinel Hardening (Phases 14-17)</summary>
+<summary>🟡 v1.4 Sentinel Hardening (Phases 14-18)</summary>
 
 - [ ] **Phase 14: Boot & Lifecycle Foundation**
   - Goal: Fix subcommand parsing and implement robust HTTP/PID management.
@@ -44,6 +44,15 @@
     - Sentinel exits without `os.Exit` in goroutines.
     - `wg.Wait()` ensures all heartbeats are flushed before exit.
     - Audit socket shuts down within 10s timeout.
+
+- [ ] **Phase 18: Production Readiness Verification**
+  - Goal: Test if Sentinel is ready for production.
+  - Requirements: TBD
+  - Success Criteria:
+    - E2E tests pass in production-like environment.
+    - Performance metrics meet production standards.
+    - No critical vulnerabilities found in production audit.
+
 
 </details>
 
@@ -88,6 +97,7 @@
 
 | Phase             | Milestone | Plans | Status   | Completed  |
 | ----------------- | --------- | ----- | -------- | ---------- |
+| 18. Prod Ready   | v1.4      | 1/1   | Complete | 2026-04-26 |
 | 17. Graceful Exit | v1.4      | 0/1   | Pending  | -          |
 | 16. Sec & Kill    | v1.4      | 0/1   | Pending  | -          |
 | 15. Err Hardening | v1.4      | 0/1   | Pending  | -          |

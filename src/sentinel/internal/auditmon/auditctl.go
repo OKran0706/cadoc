@@ -30,7 +30,7 @@ func (m *AuditctlManager) AddWatch(path string) error {
 	if err := validatePath(path); err != nil {
 		return err
 	}
-	cmd := exec.Command("auditctl", "-w", path, "-p", "wa", "-k", m.key)
+	cmd := exec.Command("auditctl", "-w", path, "-p", "rwa", "-k", m.key)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("auditctl add failed: %v (output: %s)", err, string(out))
 	}
@@ -43,7 +43,7 @@ func (m *AuditctlManager) RemoveWatch(path string) error {
 	if err := validatePath(path); err != nil {
 		return err
 	}
-	cmd := exec.Command("auditctl", "-W", path, "-p", "wa", "-k", m.key)
+	cmd := exec.Command("auditctl", "-W", path, "-p", "rwa", "-k", m.key)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("auditctl remove failed: %v (output: %s)", err, string(out))
 	}

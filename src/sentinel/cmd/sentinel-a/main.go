@@ -147,9 +147,19 @@ func main() {
 	}
 
 	if *testSign && s != nil {
-		envelope, _ := s.SignEvent(map[string]interface{}{"test": "event"})
-		fmt.Printf("Signed test event: %s ✓\n", envelope["signature"])
-		os.Exit(0)
+		envelope, _, err := s.SignEvent(map[string]interface{}{"test": "event"})
+		if err != nil {
+			log.Printf("[boot] Self-test sign failed: %v", err)
+		} else if payload, err := signer.MarshalEnvelope(envelope); err != nil {
+			log.Printf("[boot] Self-test marshal failed: %v", err)
+		} else {
+			fmt.Printf("Signed test event: %s ✓\n", envelope["signature"])
+			if err := ic.Post(ctx, payload); err != nil {
+				log.Fatalf("Test sign ingestion failed: %v", err)
+			}
+			fmt.Println("Test event successfully shipped to ingestion service ✓")
+			os.Exit(0)
+		}
 	}
 
 	// 2. Runtime Binary Verification (Skip in dev for speed)
@@ -224,18 +234,46 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			auditmon.StartServer(ctx, "/run/canary/audit.sock", func(event *auditmon.AuditEvent) {
+			if err := auditmon.StartServer(ctx, "/run/canary/audit.sock", func(event *auditmon.AuditEvent) {
+				log.Printf("[auditmon] Received event from consumer: id=%s path=%s op=%s", event.ID, event.Path, event.Op)
 				// Handler: Sign and ship the audit event
+				log.Printf("[auditmon] Signing event for path=%s", event.Path)
+				
+				eventType := "SENTINEL_FILE_TAMPER"
+				switch event.Op {
+				case "READ":
+					eventType = "SENTINEL_FILE_READ"
+				case "OPEN":
+					eventType = "SENTINEL_FILE_OPEN"
+				case "WRITE":
+					eventType = "SENTINEL_FILE_WRITE"
+				case "RENAME":
+					eventType = "SENTINEL_FILE_MOVE"
+				case "DELETE":
+					eventType = "SENTINEL_FILE_DELETE"
+				case "CHMOD":
+					eventType = "SENTINEL_FILE_ATTR_CHANGE"
+				case "CHOWN":
+					eventType = "SENTINEL_FILE_OWNER_CHANGE"
+				case "TRUNCATE":
+					eventType = "SENTINEL_FILE_TRUNCATE"
+				}
+
 				auditMap := map[string]interface{}{
-					"type":       "SENTINEL_FILE_TAMPER",
+					"type":       eventType,
+					"op":         event.Op,
 					"audit_id":   event.ID,
 					"pid":        event.PID,
 					"path":       event.Path,
 					"confidence": string(event.Confidence),
 				}
-				envelope, err := s.SignEvent(auditMap)
+				if event.DestPath != "" {
+					auditMap["dest_path"] = event.DestPath
+				}
+
+				envelope, _, err := s.SignEvent(auditMap)
 				if err != nil {
-					log.Printf("[auditmon] Failed to sign tamper event (path=%s): %v — skipping", event.Path, err)
+					log.Printf("[auditmon] Failed to sign tamper event: %v — skipping", err)
 					return
 				}
 				payload, err := signer.MarshalEnvelope(envelope)
@@ -243,10 +281,15 @@ func main() {
 					log.Printf("[auditmon] Failed to marshal tamper envelope (path=%s): %v — skipping", event.Path, err)
 					return
 				}
+				log.Printf("[auditmon] Posting tamper alert to ingestion service...")
 				if err := ic.Post(ctx, payload); err != nil {
 					log.Printf("[auditmon] Failed to post tamper alert: %v", err)
+				} else {
+					log.Printf("[auditmon] Tamper alert posted successfully!")
 				}
-			})
+			}); err != nil {
+				log.Printf("[auditmon] Socket server error: %v", err)
+			}
 		}()
 	}
 
@@ -262,9 +305,9 @@ func main() {
 		"permitted":   []string{"CAP_NET_ADMIN"},
 		"inheritable": []string{},
 	}
-	envelope, err := s.SignEvent(capEvent)
+	envelope, _, err := s.SignEvent(capEvent)
 	if err != nil {
-		log.Printf("[boot] Failed to sign capability proof event: %v — skipping", err)
+		log.Printf("[boot] Failed to sign capability proof: %v — skipping", err)
 	} else if payload, err := signer.MarshalEnvelope(envelope); err != nil {
 		log.Printf("[boot] Failed to marshal capability proof envelope: %v — skipping", err)
 	} else if err := ic.Post(ctx, payload); err != nil {
@@ -276,7 +319,11 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			deployer_daemon.StartDaemon(ctx, *deployerProfile, *deployerConfigDir, *deployerTemplateDir, *deployerInterval, *deployerMaxJitter, s, ic)
+			deployer_daemon.StartDaemon(ctx, *deployerProfile, *deployerConfigDir, *deployerTemplateDir, *deployerInterval, *deployerMaxJitter, s, ic, func(paths []string) {
+				msg := "SET_MAP " + strings.Join(paths, ",")
+				log.Printf("[boot] Broadcasting new canary map to workers: %s", msg)
+				auditmon.BroadcastControlMessage(msg)
+			})
 		}()
 	}
 
@@ -326,10 +373,10 @@ func main() {
 					"source_process": "sentinel-a",
 					"id":             "sentinel-a",
 				}
-				envelope, err := s.SignEvent(event)
+				envelope, _, err := s.SignEvent(event)
 				if err != nil {
-					log.Printf("[heartbeat] Failed to sign heartbeat: %v — skipping", err)
-					continue
+					log.Printf("[selfmon] Failed to sign tamper event: %v", err)
+					return
 				}
 				payload, err := signer.MarshalEnvelope(envelope)
 				if err != nil {
@@ -430,6 +477,10 @@ func pollKillSwitch(ctx context.Context, cfg *config.Config, s *signer.Signer, i
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if vc == nil {
+				// In -dev mode, vault client is nil, skip polling
+				continue
+			}
 			// Fetch signed killswitch ticket from Vault via API
 			ticketStr, err := vc.GetSecretField("secret/canary/control", "killswitch_ticket")
 			if err != nil {
@@ -489,9 +540,9 @@ func pollKillSwitch(ctx context.Context, cfg *config.Config, s *signer.Signer, i
 				"reason":          "Authorized kill switch",
 				"issuer":          ticket.Issuer,
 			}
-			envelope, err := s.SignEvent(degEvent)
+			envelope, _, err := s.SignEvent(degEvent)
 			if err != nil {
-				log.Printf("[killswitch] Failed to sign DEGRADED event: %v — skipping", err)
+				log.Printf("[boot] Failed to sign degradation event: %v", err)
 			} else if payload, err := signer.MarshalEnvelope(envelope); err != nil {
 				log.Printf("[killswitch] Failed to marshal DEGRADED envelope: %v — skipping", err)
 			} else if err := ic.Post(ctx, payload); err != nil {

@@ -98,6 +98,7 @@ func VerifySelfIntegrity(binaryName string) (expected string, actual string, err
 
 	// FIXME: This is a prototype stub. In production, the expected hash must be 
 	// fetched from a secure remote source (Vault) and verified against a signed manifest.
+	// UPGRADE PATH: Implement verification loop with ingestclient once metadata endpoint is ready.
 	log.Printf("[sysutil] WARNING: Self-integrity check is running in prototype mode (trust-on-first-use)")
 	expectedHash := actualHash
 
@@ -259,7 +260,9 @@ func RandomAlpha(n int) string {
 	result := make([]byte, n)
 	for i := range result {
 		b := make([]byte, 1)
-		rand.Read(b)
+		if _, err := rand.Read(b); err != nil {
+			log.Printf("[sysutil] WARNING: rand.Read failed in RandomAlpha: %v", err)
+		}
 		result[i] = chars[int(b[0])%len(chars)]
 	}
 	return string(result)
@@ -268,7 +271,9 @@ func RandomAlpha(n int) string {
 // RandomBase64 returns a random base64-encoded string of length n.
 func RandomBase64(n int) string {
 	buf := make([]byte, n)
-	rand.Read(buf)
+	if _, err := rand.Read(buf); err != nil {
+		log.Printf("[sysutil] WARNING: rand.Read failed in RandomBase64: %v", err)
+	}
 	enc := base64.StdEncoding.EncodeToString(buf)
 	if len(enc) > n {
 		return enc[:n]
@@ -279,6 +284,8 @@ func RandomBase64(n int) string {
 // RandomHex returns a random hex string of length n.
 func RandomHex(n int) string {
 	buf := make([]byte, (n+1)/2)
-	rand.Read(buf)
+	if _, err := rand.Read(buf); err != nil {
+		log.Printf("[sysutil] WARNING: rand.Read failed in RandomHex: %v", err)
+	}
 	return hex.EncodeToString(buf)[:n]
 }

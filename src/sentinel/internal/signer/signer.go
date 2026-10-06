@@ -57,16 +57,13 @@ func New(cfg config.SigningConfig, vc *vault.Client) (*Signer, error) {
 		}
 
 	case "local":
-		// Load from local file specified in config
-		if cfg.VaultPath == "" {
-			return nil, fmt.Errorf("local_path (reusing vault_path) is required for 'local' key_source")
-		}
-		keyData, err := os.ReadFile(cfg.VaultPath)
-		if err != nil {
-			return nil, fmt.Errorf("read local key file %s: %w", cfg.VaultPath, err)
+		// Read deterministic dev key directly from environment variable to ensure zero-disk
+		keyStr := os.Getenv("SENTINEL_LOCAL_KEY")
+		if keyStr == "" {
+			return nil, fmt.Errorf("SENTINEL_LOCAL_KEY environment variable is required for 'local' key_source")
 		}
 		
-		keyBytes, err := hex.DecodeString(strings.TrimSpace(string(keyData)))
+		keyBytes, err := hex.DecodeString(strings.TrimSpace(keyStr))
 		if err != nil {
 			return nil, fmt.Errorf("decode local key (hex expected): %w", err)
 		}
@@ -104,8 +101,8 @@ func loadKeyBytes(keyBytes []byte) (ed25519.PrivateKey, string, error) {
 }
 
 // SignEvent signs an event and chains it to the previous event.
-// Returns the signed envelope and the event hash (for chaining).
-func (s *Signer) SignEvent(event map[string]interface{}) (map[string]interface{}, string) {
+// Returns the signed envelope, the event hash (for chaining), and any error.
+func (s *Signer) SignEvent(event map[string]interface{}) (map[string]interface{}, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -116,7 +113,10 @@ func (s *Signer) SignEvent(event map[string]interface{}) (map[string]interface{}
 	event["host"] = s.hostname
 
 	// Canonical JSON (Go's json.Marshal sorts map keys)
-	canonical, _ := json.Marshal(event)
+	canonical, err := json.Marshal(event)
+	if err != nil {
+		return nil, "", fmt.Errorf("marshal event: %w", err)
+	}
 
 	hash := sha256.Sum256(canonical)
 	eventHash := hex.EncodeToString(hash[:])
@@ -131,7 +131,7 @@ func (s *Signer) SignEvent(event map[string]interface{}) (map[string]interface{}
 		"signature": hex.EncodeToString(sig),
 		"key_id":    s.pubKeyFP,
 	}
-	return envelope, eventHash
+	return envelope, eventHash, nil
 }
 
 // MarshalEnvelope serializes a signed envelope to JSON bytes.

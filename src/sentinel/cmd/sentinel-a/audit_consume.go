@@ -32,7 +32,7 @@ func runAuditConsumer() {
 			if line == "" {
 				continue
 			}
-			rec, err := auparse.Parse(0, line)
+			rec, err := auparse.ParseLogLine(line)
 			if err != nil {
 				continue
 			}
@@ -66,14 +66,23 @@ func runAuditConsumer() {
 
 func handleSentinelConn(conn net.Conn, agg *auditmon.Aggregator) {
 	defer conn.Close()
-	errChan := make(chan error, 1)
+	errChan := make(chan error, 2)
+	stopForwarding := make(chan struct{})
+	defer close(stopForwarding)
 
 	// A. Forward events to Sentinel
 	go func() {
-		for event := range agg.Events() {
-			_, err := fmt.Fprintf(conn, "EVENT %s %s %d %s\n", event.ID, event.Confidence, event.PID, event.Path)
-			if err != nil {
-				errChan <- err
+		for {
+			select {
+			case event := <-agg.Events():
+				line := fmt.Sprintf("EVENT %s %s %d %s %s %s\n", event.ID, event.Confidence, event.PID, event.Path, event.Op, event.DestPath)
+				log.Printf("[audit-consume-debug] Sending to socket: %q", line)
+				_, err := fmt.Fprintf(conn, line)
+				if err != nil {
+					errChan <- err
+					return
+				}
+			case <-stopForwarding:
 				return
 			}
 		}

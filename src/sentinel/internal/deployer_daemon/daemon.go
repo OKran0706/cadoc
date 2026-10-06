@@ -19,7 +19,7 @@ import (
 )
 
 // StartDaemon runs the continuous canary deployment and rotation loop.
-func StartDaemon(ctx context.Context, profileName, configDir, templateDir string, intervalSec, maxJitterSec int, s *signer.Signer, ic *ingestclient.Client) {
+func StartDaemon(ctx context.Context, profileName, configDir, templateDir string, intervalSec, maxJitterSec int, s *signer.Signer, ic *ingestclient.Client, onDeploy func([]string)) {
 	profile, err := deployer.LoadProfile(configDir, profileName)
 	if err != nil {
 		log.Printf("Deployer Daemon: failed to load profile %s: %v", profileName, err)
@@ -64,19 +64,36 @@ func StartDaemon(ctx context.Context, profileName, configDir, templateDir string
 					"map":  canaryMap,
 				}
 
-				envelope, _ := s.SignEvent(event)
-				payload, _ := signer.MarshalEnvelope(envelope)
-
-				if err := ic.Post(ctx, payload); err != nil {
+				envelope, _, err := s.SignEvent(event)
+				if err != nil {
+					log.Printf("Deployer Daemon: failed to sign canary map: %v", err)
+				} else if payload, err := signer.MarshalEnvelope(envelope); err != nil {
+					log.Printf("Deployer Daemon: failed to marshal canary map envelope: %v", err)
+				} else if err := ic.Post(ctx, payload); err != nil {
 					log.Printf("Deployer Daemon: failed to emit map: %v", err)
 				} else {
 					log.Printf("Deployer Daemon: rotated %d canaries. Signed map sent to Ingestion Service.", len(newCanaries))
+					
+					// C-01: Broadcast the new paths to the auditmon workers
+					if onDeploy != nil {
+						var paths []string
+						for _, c := range newCanaries {
+							paths = append(paths, c.Path)
+						}
+						onDeploy(paths)
+					}
 				}
 			}
 
 			// 5. Sleep with Jitter
-			jitter, _ := rand.Int(rand.Reader, big.NewInt(int64(maxJitterSec)))
-			sleepDur := time.Duration(intervalSec+int(jitter.Int64())) * time.Second
+			jitter, err := rand.Int(rand.Reader, big.NewInt(int64(maxJitterSec)))
+			var sleepDur time.Duration
+			if err != nil {
+				log.Printf("Deployer Daemon: rand.Int failed, sleeping without jitter: %v", err)
+				sleepDur = time.Duration(intervalSec) * time.Second
+			} else {
+				sleepDur = time.Duration(intervalSec+int(jitter.Int64())) * time.Second
+			}
 			select {
 			case <-time.After(sleepDur):
 			case <-ctx.Done():
@@ -103,17 +120,25 @@ func removeOldCanariesBruteForce(profile *deployer.Profile) {
 				continue
 			}
 			buf := make([]byte, 4096)
-			n, _ := f.Read(buf)
+			n, err := f.Read(buf)
 			f.Close()
+			if err != nil && n == 0 {
+				continue
+			}
 
 			if n > 0 && strings.Contains(string(buf[:n]), "__CANARY_ID__=") {
-				_ = os.Remove(filePath)
+				if err := os.Remove(filePath); err != nil {
+					log.Printf("Deployer Daemon: failed to remove orphan canary %s: %v", filePath, err)
+				}
 			}
 		}
 	}
 }
 
 func hostname() string {
-	h, _ := os.Hostname()
+	h, err := os.Hostname()
+	if err != nil {
+		return "unknown"
+	}
 	return h
 }
