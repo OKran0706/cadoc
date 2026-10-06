@@ -15,15 +15,21 @@ type Client struct {
 	client *http.Client
 }
 
-// New creates a new mTLS Ingestion Client.
+// New creates a new mTLS Ingestion Client with a production-grade pooled transport.
+// The client is safe for concurrent use and reuses connections across heartbeats and events.
 func New(url string, tlsConfig *tls.Config) *Client {
+	transport := &http.Transport{
+		TLSClientConfig:     tlsConfig,
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 5,
+		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:  false,
+	}
 	return &Client{
 		url: url,
 		client: &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: tlsConfig,
-			},
-			Timeout: 10 * time.Second,
+			Transport: transport,
+			Timeout:   10 * time.Second,
 		},
 	}
 }
@@ -48,4 +54,10 @@ func (c *Client) Post(ctx context.Context, payload []byte) error {
 	}
 
 	return nil
+}
+
+// HTTPClient exposes the underlying *http.Client for OOB or health-check callers
+// that share this transport rather than creating their own http.Client.
+func (c *Client) HTTPClient() *http.Client {
+	return c.client
 }

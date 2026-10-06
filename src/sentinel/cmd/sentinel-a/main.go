@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/your-org/canary/sentinel/internal/auditmon"
 	"github.com/your-org/canary/sentinel/internal/auth"
 	"github.com/your-org/canary/sentinel/internal/config"
 	"github.com/your-org/canary/sentinel/internal/deployer_daemon"
@@ -29,11 +30,17 @@ import (
 	"github.com/your-org/canary/sentinel/internal/signer"
 	"github.com/your-org/canary/sentinel/internal/sysutil"
 	"github.com/your-org/canary/sentinel/internal/vault"
-	"github.com/your-org/canary/sentinel/internal/auditmon" // 11.05: Added auditmon
 )
 
-
 func main() {
+	// 0. Subcommand routing — MUST come before flag.Parse().
+	// audispd invokes this binary with "audit-consume" as argv[1].
+	// No flags are parsed or needed in this path.
+	if len(os.Args) >= 2 && os.Args[1] == "audit-consume" {
+		runAuditConsumer()
+		return
+	}
+
 	devMode := flag.Bool("dev", false, "Run in development mode (skips auth/ingestion bootstrap)")
 	configPath := flag.String("config", "/opt/sentinel/config/sentinel.yaml", "Path to sentinel config")
 	joinToken := flag.String("join-token", "", "Initial vault bootstrap token")
@@ -47,20 +54,14 @@ func main() {
 	deployerMaxJitter := flag.Int("deployer-max-jitter", 1800, "Max random jitter for rotation (seconds)")
 	flag.Parse()
 
-	// 0. Subcommand Check (audispd plugin mode)
-	if len(os.Args) >= 2 && os.Args[1] == "audit-consume" {
-		runAuditConsumer()
-		return
-	}
-
-	log.Println("=== SENTINEL-A DAEMON BOOTING (MERGED VERSION) ===")
+	log.Println("=== SENTINEL-A DAEMON BOOTING ===")
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// 0. Resolve State Directory (Managed by systemd StateDirectory=canary)
+	// Resolve State Directory (Managed by systemd StateDirectory=canary)
 	stateDir := os.Getenv("STATE_DIRECTORY")
 	if stateDir == "" {
 		stateDir = "/var/lib/canary"
@@ -71,7 +72,7 @@ func main() {
 	var s *signer.Signer
 	var vaultClient *vault.Client
 	var tlsConfig *tls.Config
-	
+
 	ctx := context.Background()
 
 	if *devMode {
@@ -81,7 +82,7 @@ func main() {
 			log.Fatalf("Signer init failed: %v", err)
 		}
 		// Mock ingest client (or local-only)
-		ic = ingestclient.New(cfg.Watchdog.IngestionURL, nil) 
+		ic = ingestclient.New(cfg.Watchdog.IngestionURL, nil)
 	} else {
 		// --- PRODUCTION BOOTSTRAP ---
 		// 1a. Resolve Vault Token
@@ -103,13 +104,11 @@ func main() {
 			}
 		} else {
 			// Recovery path (No join token — attempting cert-based recovery)
-			if !auth.IsProvisioned() {
-				log.Println("No join token — attempting cert-based recovery...")
-				if err := auth.EnsureCertificates(ctx, cfg.Watchdog.IngestionURL); err != nil {
-					log.Fatalf("Authentication failure: %v", err)
-				}
+			// Ensure certificates are present (recovery path)
+			if err := auth.EnsureCertificates(ctx, cfg.Watchdog.IngestionURL); err != nil {
+				log.Fatalf("Authentication failure: %v", err)
 			}
-			
+
 			// Initial mTLS recovery
 			if _, _, err := sysutil.LoadPersistedCerts(stateDir); err != nil {
 				log.Fatalf("No certificates found in %s — cannot authenticate: %v", stateDir, err)
@@ -155,7 +154,7 @@ func main() {
 	// 2. Runtime Binary Verification (Skip in dev for speed)
 	if _, _, err := sysutil.VerifySelfIntegrity("sentinel-a"); err != nil {
 		if !*devMode {
-			sendOOBAlert(cfg.OOBAlert.URL, map[string]interface{}{
+			sendOOBAlert(ctx, ic, cfg.OOBAlert.URL, map[string]interface{}{
 				"type": "BINARY_TAMPERED",
 				"host": os.Getenv("HOSTNAME"),
 			})
@@ -164,18 +163,12 @@ func main() {
 		log.Printf("[DEV] Binary integrity warning (ignored in dev): %v", err)
 	}
 
-	if *testSign {
-		envelope, _ := s.SignEvent(map[string]interface{}{"test": "event"})
-		fmt.Printf("Signed test event: %s ✓\n", envelope["signature"])
-		os.Exit(0)
-	}
-
 	// Initialize maintenance ticket verifier (fetch pubkey from Vault — held in memory only)
 	var ticketVerifier *auth.Verifier
 	if !*devMode {
 		log.Printf("Fetching maintenance pubkey from Vault: %s field=%s",
 			cfg.Watchdog.MaintenanceVaultPath, cfg.Watchdog.MaintenanceVaultField)
-		
+
 		pubKeyStr, err := vaultClient.GetSecretField(cfg.Watchdog.MaintenanceVaultPath, cfg.Watchdog.MaintenanceVaultField)
 		if err != nil {
 			log.Printf("Warning: failed to fetch maintenance pubkey from Vault: %v — ticket auth disabled", err)
@@ -192,10 +185,9 @@ func main() {
 		log.Println("[DEV] Skipping maintenance pubkey fetch (Vault disabled in dev)")
 	}
 
-
 	// Fail closed: verify Ingestion LB is reachable before starting (Skip in dev)
 	if !*devMode {
-		if err := verifyIngestion(cfg.Watchdog.IngestionURL, tlsConfig); err != nil {
+		if err := verifyIngestionWithRetry(ctx, ic, cfg.Watchdog.IngestionURL); err != nil {
 			log.Fatalf("Ingestion Service unreachable — failing closed: %v", err)
 		}
 	} else {
@@ -207,9 +199,15 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	// Write PID file
-	if err := os.WriteFile("/run/canary/sentinel-a.pid", []byte(fmt.Sprintf("%d", os.Getpid())), 0644); err != nil {
-		log.Printf("Warning: could not write PID file: %v", err)
+	// Write PID file — ensure directory exists first.
+	const pidDir = "/run/canary"
+	const pidFile = pidDir + "/sentinel-a.pid"
+	if err := os.MkdirAll(pidDir, 0700); err != nil {
+		log.Printf("Warning: could not create PID directory %s: %v", pidDir, err)
+	} else if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0644); err != nil {
+		log.Printf("Warning: could not write PID file %s: %v", pidFile, err)
+	} else {
+		log.Printf("PID file written: %s (pid=%d)", pidFile, os.Getpid())
 	}
 
 	// 2. Start Self-Monitoring & Health Management
@@ -220,10 +218,8 @@ func main() {
 		go selfmon.PollProc(ctx, os.Getpid(), s, ic)
 	}
 
-	// 11.05: Start Auditmon IPC Server (If in Auditd mode)
+	// Start Auditmon IPC Server (If in Auditd mode)
 	if selfmon.DetectEnvironment() == selfmon.EnvAuditd {
-
-		// Start IPC Server
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -245,9 +241,7 @@ func main() {
 		}()
 	}
 
-	// drop capabilities after all initializations
-
-	// 3. Drop capabilities
+	// 3. Drop capabilities after all initializations
 	if err := sysutil.DropCapabilitiesAfterInit(); err != nil {
 		log.Fatalf("Failed to drop capabilities: %v", err)
 	}
@@ -278,7 +272,6 @@ func main() {
 	// monitor are disabled to avoid false SENTINEL_DOWN alerts.
 	// Uncomment when Sentinel-B is deployed.
 	//
-	// // Start heartbeat server (sentinel-b will connect to this)
 	// wg.Add(1)
 	// go func() {
 	// 	defer wg.Done()
@@ -287,7 +280,6 @@ func main() {
 	// 	}
 	// }()
 	//
-	// // Start peer heartbeat checker (monitors sentinel-b)
 	// wg.Add(1)
 	// go func() {
 	// 	defer wg.Done()
@@ -320,7 +312,7 @@ func main() {
 				event := map[string]interface{}{
 					"type":           "SENTINEL_HEARTBEAT",
 					"source_process": "sentinel-a",
-					"id":             "sentinel-a", // Explicit ID for indexing
+					"id":             "sentinel-a",
 				}
 				envelope, _ := s.SignEvent(event)
 				payload, _ := signer.MarshalEnvelope(envelope)
@@ -343,19 +335,68 @@ func main() {
 	wg.Wait()
 }
 
-func verifyIngestion(url string, tc *tls.Config) error {
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: tc,
-		},
+// verifyIngestionWithRetry checks that the ingestion service is reachable and healthy
+// before the Sentinel daemon enters its main event loop.
+//
+// Strategy:
+//   - Exponential backoff: 1s → 2s → 4s → 8s → ... capped at 30s per sleep
+//   - Total retry window capped at 10 minutes from first attempt
+//   - Requires HTTP 200 or 204 response (connectivity alone is not sufficient)
+//   - Tries /health endpoint; falls back to base URL on 404
+func verifyIngestionWithRetry(ctx context.Context, ic *ingestclient.Client, baseURL string) error {
+	const maxElapsed = 10 * time.Minute
+	const initialDelay = 1 * time.Second
+	const maxDelay = 30 * time.Second
+
+	healthURL := strings.TrimRight(baseURL, "/") + "/health"
+	deadline := time.Now().Add(maxElapsed)
+	delay := initialDelay
+	attempt := 0
+
+	for {
+		attempt++
+		err := checkIngestionEndpoint(ctx, ic.HTTPClient(), healthURL)
+		if err == nil {
+			log.Printf("[boot] Ingestion service reachable after %d attempt(s)", attempt)
+			return nil
+		}
+
+		log.Printf("[boot] Ingestion check attempt %d failed: %v", attempt, err)
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("ingestion service unreachable after %s: %w", maxElapsed, err)
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("ingestion check cancelled: %w", ctx.Err())
+		case <-time.After(delay):
+		}
+
+		delay *= 2
+		if delay > maxDelay {
+			delay = maxDelay
+		}
 	}
-	resp, err := client.Get(url) // Basic check (might return 405, but confirms connectivity)
+}
+
+// checkIngestionEndpoint performs a single GET to the given URL and validates the status code.
+func checkIngestionEndpoint(ctx context.Context, hc *http.Client, url string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return fmt.Errorf("ingestion check: %w", err)
+		return fmt.Errorf("build request: %w", err)
+	}
+
+	resp, err := hc.Do(req)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
 	}
 	defer resp.Body.Close()
-	return nil
+
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
+		return nil
+	}
+	return fmt.Errorf("unexpected status: %s", resp.Status)
 }
 
 func pollKillSwitch(ctx context.Context, cfg *config.Config, s *signer.Signer, ic *ingestclient.Client, verifier *auth.Verifier, vc *vault.Client, stateDir string) {
@@ -394,26 +435,25 @@ func pollKillSwitch(ctx context.Context, cfg *config.Config, s *signer.Signer, i
 			ticket, err := verifier.VerifyFromJSON(ticketJSON, auth.ActionKillSwitch)
 			if err != nil {
 				log.Printf("KILL SWITCH TICKET REJECTED: %v", err)
-				sendOOBAlert(oobUrl, map[string]interface{}{
-					"type":   "INVALID_KILLSWITCH_TICKET",
-					"error":  err.Error(),
-					"host":   os.Getenv("HOSTNAME"),
+				sendOOBAlert(ctx, ic, oobUrl, map[string]interface{}{
+					"type":  "INVALID_KILLSWITCH_TICKET",
+					"error": err.Error(),
+					"host":  os.Getenv("HOSTNAME"),
 				})
 				continue
 			}
 
 			log.Printf("Kill switch AUTHORIZED: issuer=%s nonce=%s", ticket.Issuer, ticket.Nonce)
 
-
-			// 2. Start inotify fallback (If systemd available)
+			// Start inotify fallback (If systemd available)
 			if sysutil.IsCommandAvailable("systemctl") {
 				exec.Command("systemctl", "start", "canary-inotify-watcher").Run()
 			} else {
 				log.Println("[INFO] systemctl not found — skipping inotify fallback start")
 			}
 
-			// 3. Emit signed events
-			sendOOBAlert(oobUrl, map[string]interface{}{
+			// Emit signed events
+			sendOOBAlert(ctx, ic, oobUrl, map[string]interface{}{
 				"type":   "SENTINEL_KILL_SWITCH_ACTIVATED",
 				"issuer": ticket.Issuer,
 				"host":   os.Getenv("HOSTNAME"),
@@ -464,14 +504,27 @@ func refreshVaultAccess(cfg *config.Config, vc *vault.Client, stateDir string) e
 	return nil
 }
 
-func sendOOBAlert(url string, payload map[string]interface{}) {
+// sendOOBAlert fires a JSON alert to the OOB webhook using the shared ingest client transport.
+// It accepts a context so it can be cancelled during shutdown.
+func sendOOBAlert(ctx context.Context, ic *ingestclient.Client, url string, payload map[string]interface{}) {
 	payload["ts"] = time.Now().UTC().Format(time.RFC3339Nano)
-	body, _ := json.Marshal(payload)
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
-	if err == nil {
-		resp.Body.Close()
+	body, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("[oob] Failed to marshal alert payload: %v", err)
+		return
 	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		log.Printf("[oob] Failed to create OOB request: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := ic.HTTPClient().Do(req)
+	if err != nil {
+		log.Printf("[oob] OOB alert delivery failed: %v", err)
+		return
+	}
+	resp.Body.Close()
 }
-
-
