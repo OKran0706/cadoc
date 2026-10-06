@@ -6,6 +6,7 @@ package vault
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,6 +14,15 @@ import (
 	"sync"
 
 	"github.com/hashicorp/vault/api"
+)
+
+// Sentinel errors for Vault HTTP response codes.
+// Callers should use errors.Is to check for specific conditions.
+var (
+	// ErrForbidden is returned when Vault responds with HTTP 403 (token expired or insufficient policy).
+	ErrForbidden = errors.New("vault: forbidden (403)")
+	// ErrNotFound is returned when Vault responds with HTTP 404 (secret path does not exist).
+	ErrNotFound = errors.New("vault: not found (404)")
 )
 
 // Client wraps the official Vault API client.
@@ -146,7 +156,15 @@ func (c *Client) GetSecretField(path, field string) (string, error) {
 
 	secret, err := c.vault.Logical().Read(apiPath)
 	if err != nil {
-		return "", fmt.Errorf("read secret %s (api: %s): %w", path, apiPath, err)
+		errStr := err.Error()
+		switch {
+		case strings.Contains(errStr, "403"):
+			return "", fmt.Errorf("read secret %s: %w", path, ErrForbidden)
+		case strings.Contains(errStr, "404"):
+			return "", fmt.Errorf("read secret %s: %w", path, ErrNotFound)
+		default:
+			return "", fmt.Errorf("read secret %s (api: %s): %w", path, apiPath, err)
+		}
 	}
 
 	if secret == nil || secret.Data == nil {

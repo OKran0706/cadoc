@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -232,8 +233,16 @@ func main() {
 					"path":       event.Path,
 					"confidence": string(event.Confidence),
 				}
-				envelope, _ := s.SignEvent(auditMap)
-				payload, _ := signer.MarshalEnvelope(envelope)
+				envelope, err := s.SignEvent(auditMap)
+				if err != nil {
+					log.Printf("[auditmon] Failed to sign tamper event (path=%s): %v — skipping", event.Path, err)
+					return
+				}
+				payload, err := signer.MarshalEnvelope(envelope)
+				if err != nil {
+					log.Printf("[auditmon] Failed to marshal tamper envelope (path=%s): %v — skipping", event.Path, err)
+					return
+				}
 				if err := ic.Post(ctx, payload); err != nil {
 					log.Printf("[auditmon] Failed to post tamper alert: %v", err)
 				}
@@ -253,10 +262,13 @@ func main() {
 		"permitted":   []string{"CAP_NET_ADMIN"},
 		"inheritable": []string{},
 	}
-	envelope, _ := s.SignEvent(capEvent)
-	payload, _ := signer.MarshalEnvelope(envelope)
-	if err := ic.Post(ctx, payload); err != nil {
-		log.Printf("Failed to emit initial capability proof: %v", err)
+	envelope, err := s.SignEvent(capEvent)
+	if err != nil {
+		log.Printf("[boot] Failed to sign capability proof event: %v — skipping", err)
+	} else if payload, err := signer.MarshalEnvelope(envelope); err != nil {
+		log.Printf("[boot] Failed to marshal capability proof envelope: %v — skipping", err)
+	} else if err := ic.Post(ctx, payload); err != nil {
+		log.Printf("[boot] Failed to emit initial capability proof: %v", err)
 	}
 
 	// 5. Start internal Canary Deployer subsystem
@@ -314,8 +326,16 @@ func main() {
 					"source_process": "sentinel-a",
 					"id":             "sentinel-a",
 				}
-				envelope, _ := s.SignEvent(event)
-				payload, _ := signer.MarshalEnvelope(envelope)
+				envelope, err := s.SignEvent(event)
+				if err != nil {
+					log.Printf("[heartbeat] Failed to sign heartbeat: %v — skipping", err)
+					continue
+				}
+				payload, err := signer.MarshalEnvelope(envelope)
+				if err != nil {
+					log.Printf("[heartbeat] Failed to marshal heartbeat envelope: %v — skipping", err)
+					continue
+				}
 
 				if err := ic.Post(ctx, payload); err != nil {
 					log.Printf("Heartbeat ingestion error: %v", err)
@@ -399,6 +419,7 @@ func checkIngestionEndpoint(ctx context.Context, hc *http.Client, url string) er
 	return fmt.Errorf("unexpected status: %s", resp.Status)
 }
 
+
 func pollKillSwitch(ctx context.Context, cfg *config.Config, s *signer.Signer, ic *ingestclient.Client, verifier *auth.Verifier, vc *vault.Client, stateDir string) {
 	oobUrl := cfg.OOBAlert.URL
 	ticker := time.NewTicker(60 * time.Second)
@@ -412,10 +433,10 @@ func pollKillSwitch(ctx context.Context, cfg *config.Config, s *signer.Signer, i
 			// Fetch signed killswitch ticket from Vault via API
 			ticketStr, err := vc.GetSecretField("secret/canary/control", "killswitch_ticket")
 			if err != nil {
-				if strings.Contains(err.Error(), "403") {
-					log.Println("Vault token expired (403). Attempting refresh...")
+				if errors.Is(err, vault.ErrForbidden) {
+					log.Println("[killswitch] Vault token expired (403) — attempting refresh...")
 					if err := refreshVaultAccess(cfg, vc, stateDir); err != nil {
-						log.Printf("Vault recovery failed: %v", err)
+						log.Printf("[killswitch] Vault recovery failed: %v", err)
 					}
 				}
 				continue // No ticket in Vault — normal operation
@@ -447,7 +468,9 @@ func pollKillSwitch(ctx context.Context, cfg *config.Config, s *signer.Signer, i
 
 			// Start inotify fallback (If systemd available)
 			if sysutil.IsCommandAvailable("systemctl") {
-				exec.Command("systemctl", "start", "canary-inotify-watcher").Run()
+				if err := exec.Command("systemctl", "start", "canary-inotify-watcher").Run(); err != nil {
+					log.Printf("[killswitch] Failed to start canary-inotify-watcher: %v (non-fatal)", err)
+				}
 			} else {
 				log.Println("[INFO] systemctl not found — skipping inotify fallback start")
 			}
@@ -466,10 +489,13 @@ func pollKillSwitch(ctx context.Context, cfg *config.Config, s *signer.Signer, i
 				"reason":          "Authorized kill switch",
 				"issuer":          ticket.Issuer,
 			}
-			envelope, _ := s.SignEvent(degEvent)
-			payload, _ := signer.MarshalEnvelope(envelope)
-			if err := ic.Post(ctx, payload); err != nil {
-				log.Printf("Failed to emit DEGRADED event during killswitch: %v", err)
+			envelope, err := s.SignEvent(degEvent)
+			if err != nil {
+				log.Printf("[killswitch] Failed to sign DEGRADED event: %v — skipping", err)
+			} else if payload, err := signer.MarshalEnvelope(envelope); err != nil {
+				log.Printf("[killswitch] Failed to marshal DEGRADED envelope: %v — skipping", err)
+			} else if err := ic.Post(ctx, payload); err != nil {
+				log.Printf("[killswitch] Failed to emit DEGRADED event: %v", err)
 			}
 
 			log.Println("KILL SWITCH TRIGGERED — SHUTTING DOWN")
