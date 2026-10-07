@@ -40,16 +40,15 @@ func StartDaemon(ctx context.Context, profileName, configDir, templateDir string
 			log.Println("Canary Deployer Daemon stopping...")
 			return
 		default:
-			// 2. Remove previous canaries using in-memory state
-			for _, c := range activeCanaries {
-				_ = os.Remove(c.Path)
-			}
-
 			// 3. Deploy New Canaries
 			newCanaries, err := deployer.Deploy(profile, templateDir, false)
 			if err != nil {
-				log.Printf("Deployer Daemon: error during deployment: %v", err)
+				log.Printf("Deployer Daemon: error during deployment: %v — keeping existing canaries", err)
 			} else {
+				// 2. Remove previous canaries using in-memory state only after successful deploy
+				for _, c := range activeCanaries {
+					_ = os.Remove(c.Path)
+				}
 				activeCanaries = newCanaries
 
 				// 4. Build and Emit the Map Event

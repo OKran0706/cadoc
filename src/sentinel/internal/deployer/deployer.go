@@ -284,6 +284,11 @@ func blendTimestamp(canaryPath, dir string) {
 		}
 		return
 	}
+	
+	// If no suitable file was found, fall back to the directory's mtime
+	if info, err := os.Stat(dir); err == nil {
+		_ = os.Chtimes(canaryPath, info.ModTime(), info.ModTime())
+	}
 }
 
 func getBlendedMtime(dir string) string {
@@ -301,6 +306,10 @@ func getBlendedMtime(dir string) string {
 		}
 		return info.ModTime().Format(time.RFC3339)
 	}
-	return ""
+	// Fall back to directory mtime or current time
+	if info, err := os.Stat(dir); err == nil {
+		return info.ModTime().Format(time.RFC3339)
+	}
+	return time.Now().UTC().Format(time.RFC3339)
 }
 
