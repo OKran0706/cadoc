@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -16,6 +17,7 @@ import (
 	"github.com/elastic/go-libaudit/auparse"
 	"github.com/your-org/canary/sentinel/internal/auditmon"
 )
+
 
 // runAuditConsumer runs as a child of audispd, reading from stdin
 // and forwarding aggregated events to the main Sentinel process.
@@ -67,15 +69,23 @@ func runAuditConsumer() {
 
 func handleSentinelConn(conn net.Conn, agg *auditmon.Aggregator) {
 	defer conn.Close()
-	errChan := make(chan error, 2)
-	stopForwarding := make(chan struct{})
-	defer close(stopForwarding)
 
-	// A. Forward events to Sentinel
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errChan := make(chan error, 2)
+
+	// A. Forward aggregated events to Sentinel daemon
 	go func() {
 		for {
 			select {
-			case event := <-agg.Events():
+			case <-ctx.Done():
+				return
+			case event, ok := <-agg.Events():
+				if !ok {
+					errChan <- fmt.Errorf("aggregator events channel closed")
+					return
+				}
 				b, err := json.Marshal(event)
 				if err != nil {
 					log.Printf("[audit-consume] Failed to marshal event: %v", err)
@@ -83,18 +93,15 @@ func handleSentinelConn(conn net.Conn, agg *auditmon.Aggregator) {
 				}
 				line := fmt.Sprintf("EVENT %s\n", string(b))
 				log.Printf("[audit-consume-debug] Sending to socket: %q", line)
-				_, err = fmt.Fprintf(conn, line)
-				if err != nil {
+				if _, err = fmt.Fprintf(conn, "%s", line); err != nil {
 					errChan <- err
 					return
 				}
-			case <-stopForwarding:
-				return
 			}
 		}
 	}()
 
-	// B. Receive control messages from Sentinel (e.g. SET_MAP)
+	// B. Receive control messages (SET_MAP) from Sentinel daemon
 	go func() {
 		scanner := bufio.NewScanner(conn)
 		for scanner.Scan() {
@@ -115,7 +122,10 @@ func handleSentinelConn(conn net.Conn, agg *auditmon.Aggregator) {
 		}
 	}()
 
-	// Wait for any error
+	// Wait for first error from either goroutine, then cancel both.
+	// cancel() via defer cancels goroutine A via ctx.Done().
+	// conn.Close() via defer unblocks goroutine B's scanner with an EOF.
 	err := <-errChan
 	log.Printf("[audit-consume] IPC Error: %v. Reconnecting...", err)
 }
+
