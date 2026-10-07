@@ -156,15 +156,16 @@ func (c *Client) GetSecretField(path, field string) (string, error) {
 
 	secret, err := c.vault.Logical().Read(apiPath)
 	if err != nil {
-		errStr := err.Error()
-		switch {
-		case strings.Contains(errStr, "403"):
-			return "", fmt.Errorf("read secret %s: %w", path, ErrForbidden)
-		case strings.Contains(errStr, "404"):
-			return "", fmt.Errorf("read secret %s: %w", path, ErrNotFound)
-		default:
-			return "", fmt.Errorf("read secret %s (api: %s): %w", path, apiPath, err)
+		var respErr *api.ResponseError
+		if errors.As(err, &respErr) {
+			switch respErr.StatusCode {
+			case http.StatusForbidden:
+				return "", fmt.Errorf("read secret %s: %w", path, ErrForbidden)
+			case http.StatusNotFound:
+				return "", fmt.Errorf("read secret %s: %w", path, ErrNotFound)
+			}
 		}
+		return "", fmt.Errorf("read secret %s (api: %s): %w", path, apiPath, err)
 	}
 
 	if secret == nil || secret.Data == nil {

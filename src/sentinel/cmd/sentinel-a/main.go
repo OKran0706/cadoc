@@ -220,12 +220,14 @@ func main() {
 		go selfmon.PollProc(ctx, os.Getpid(), s, ic)
 	}
 
+	var ipcServer *auditmon.Server
 	// Start Auditmon IPC Server (If in Auditd mode)
 	if selfmon.DetectEnvironment() == selfmon.EnvAuditd {
+		ipcServer = auditmon.NewServer()
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := auditmon.StartServer(ctx, "/run/canary/audit.sock", func(event *auditmon.AuditEvent) {
+			if err := ipcServer.Start(ctx, "/run/canary/audit.sock", func(event *auditmon.AuditEvent) {
 				log.Printf("[auditmon] Received event from consumer: id=%s path=%s op=%s", event.ID, event.Path, event.Op)
 				// Handler: Sign and ship the audit event
 				log.Printf("[auditmon] Signing event for path=%s", event.Path)
@@ -314,7 +316,9 @@ func main() {
 				b, _ := json.Marshal(paths)
 				msg := "SET_MAP " + string(b)
 				log.Printf("[boot] Broadcasting new canary map to workers: %s", msg)
-				auditmon.BroadcastControlMessage(msg)
+				if ipcServer != nil {
+					ipcServer.BroadcastControlMessage(msg)
+				}
 			})
 		}()
 	}

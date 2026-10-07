@@ -15,14 +15,20 @@ import (
 	"github.com/your-org/canary/sentinel/internal/sysutil"
 )
 
-var (
+type Server struct {
 	workersMu     sync.Mutex
-	workers       = make(map[net.Conn]bool)
-	currentMapMsg string // H-01: cached latest SET_MAP for replay on reconnect
-)
+	workers       map[net.Conn]bool
+	currentMapMsg string
+}
 
-// StartServer listens on a Unix socket for events forwarded by the audit consumer plugin.
-func StartServer(ctx context.Context, socketPath string, handler func(event *AuditEvent)) error {
+func NewServer() *Server {
+	return &Server{
+		workers: make(map[net.Conn]bool),
+	}
+}
+
+// Start listens on a Unix socket for events forwarded by the audit consumer plugin.
+func (s *Server) Start(ctx context.Context, socketPath string, handler func(event *AuditEvent)) error {
 	listener, err := sysutil.ListenUnix(ctx, socketPath, 0660)
 	if err != nil {
 		return err
@@ -42,21 +48,21 @@ func StartServer(ctx context.Context, socketPath string, handler func(event *Aud
 					continue
 				}
 			}
-			workersMu.Lock()
-			workers[conn] = true
+			s.workersMu.Lock()
+			s.workers[conn] = true
 			// H-01: Replay current canary map to newly connected worker immediately.
-			if currentMapMsg != "" {
-				payload := []byte(currentMapMsg + "\n")
+			if s.currentMapMsg != "" {
+				payload := []byte(s.currentMapMsg + "\n")
 				if _, err := conn.Write(payload); err != nil {
 					log.Printf("[auditmon] Failed to replay map to new worker: %v", err)
 					conn.Close()
-					delete(workers, conn)
-					workersMu.Unlock()
+					delete(s.workers, conn)
+					s.workersMu.Unlock()
 					continue
 				}
 				log.Printf("[auditmon] Replayed canary map to new worker (%d bytes)", len(payload))
 			}
-			workersMu.Unlock()
+			s.workersMu.Unlock()
 			go handleConnection(ctx, conn, handler)
 		}
 	}()
@@ -67,22 +73,22 @@ func StartServer(ctx context.Context, socketPath string, handler func(event *Aud
 
 // BroadcastControlMessage sends a control command to all connected workers.
 // For SET_MAP messages, the message is also cached for replay on new connections.
-func BroadcastControlMessage(msg string) {
-	workersMu.Lock()
-	defer workersMu.Unlock()
+func (s *Server) BroadcastControlMessage(msg string) {
+	s.workersMu.Lock()
+	defer s.workersMu.Unlock()
 
 	// H-01: Cache SET_MAP for replay on new connections.
 	if strings.HasPrefix(msg, "SET_MAP ") {
-		currentMapMsg = msg
+		s.currentMapMsg = msg
 	}
 
 	payload := []byte(msg + "\n")
-	for conn := range workers {
+	for conn := range s.workers {
 		_, err := conn.Write(payload)
 		if err != nil {
 			log.Printf("[auditmon] Failed to send control message to worker: %v", err)
 			conn.Close()
-			delete(workers, conn)
+			delete(s.workers, conn)
 		}
 	}
 }
