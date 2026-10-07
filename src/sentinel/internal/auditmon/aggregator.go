@@ -51,31 +51,41 @@ type eventBuffer struct {
 	cwd        *auparse.AuditMessage
 	proctitle  *auparse.AuditMessage
 	lastUpdate time.Time
+
+	// Cached parsed fields
+	syscallFields map[string]string
+	pathsFields   []map[string]string
+	cwdFields     map[string]string
 }
 
 // Aggregator handles the reassembly of interleaved audit records.
 type Aggregator struct {
-	mu           sync.Mutex
-	buffers      map[string]*eventBuffer
-	timeout      time.Duration
-	maxBuffers   int
-	emitChan     chan *AuditEvent
-	stopChan     chan struct{}
-	canaryMap    map[string]bool // Thread-safe set of paths to monitor
+	mu         sync.Mutex
+	buffers    map[string]*eventBuffer
+	timeout    time.Duration
+	maxBuffers int
+	emitChan   chan *AuditEvent
+	stopChan   chan struct{}
+	canaryMap  map[string]bool // Thread-safe set of paths to monitor
 }
 
 // NewAggregator creates a new stateful audit aggregator.
-func NewAggregator(timeout time.Duration, maxBuffers int) *Aggregator {
+func NewAggregator(timeout time.Duration, maxBuffers int, emitChanSize int) *Aggregator {
 	a := &Aggregator{
 		buffers:    make(map[string]*eventBuffer),
 		canaryMap:  make(map[string]bool),
 		timeout:    timeout,
 		maxBuffers: maxBuffers,
-		emitChan:   make(chan *AuditEvent, 1000),
+		emitChan:   make(chan *AuditEvent, emitChanSize),
 		stopChan:   make(chan struct{}),
 	}
 	go a.janitor()
 	return a
+}
+
+// Stop shuts down the aggregator and its janitor goroutine.
+func (a *Aggregator) Stop() {
+	close(a.stopChan)
 }
 
 // SetWatchPaths updates the in-memory registry of paths to monitor.
@@ -97,7 +107,7 @@ func (a *Aggregator) ProcessRecord(rec *auparse.AuditMessage) {
 	// 11.02a: Manually parse the Audit ID and Metadata from the raw message
 	// Audit records look like: type=SYSCALL msg=audit(17137123.123:456): ...
 	auditID := extractAuditID(rec.RawData)
-	
+
 	// Key: AuditID (it's unique per event across all processes/threads)
 	key := auditID
 
@@ -133,14 +143,20 @@ func (a *Aggregator) ProcessRecord(rec *auparse.AuditMessage) {
 		}
 	}
 
+	// Parse fields using auparse library
+	fields, _ := rec.Data()
+
 	// Categorize the record by its Type (uint16)
 	switch recType {
 	case 1300: // AUDIT_SYSCALL
 		buf.syscall = rec
+		buf.syscallFields = fields
 	case 1302: // AUDIT_PATH
 		buf.paths = append(buf.paths, rec)
+		buf.pathsFields = append(buf.pathsFields, fields)
 	case 1307: // AUDIT_CWD
 		buf.cwd = rec
+		buf.cwdFields = fields
 	case 1323: // AUDIT_PROCTITLE
 		buf.proctitle = rec
 	}
@@ -177,13 +193,13 @@ func (a *Aggregator) isComplete(buf *eventBuffer) bool {
 
 	// 13.2.3: Worker-side filtering
 	// Check if any of the paths are in our Canary Map
-	for _, pRec := range buf.paths {
-		path := strings.Trim(extractString(pRec, "name"), "\"")
+	for _, fields := range buf.pathsFields {
+		path := strings.Trim(fields["name"], "\"")
 		if a.canaryMap[path] {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -202,31 +218,55 @@ func (a *Aggregator) emit(key string) {
 
 	// 1. Extract from SYSCALL record
 	if buf.syscall != nil {
+		fields := buf.syscallFields
 		event.Type = "AUDIT_SYSCALL"
-		event.UID = extractInt(buf.syscall, "uid")
-		event.Comm = extractString(buf.syscall, "comm")
-		event.Exe = extractString(buf.syscall, "exe")
-		// Extract PID from SYSCALL data manually
-		event.PID = extractInt(buf.syscall, "pid")
-		event.Op = identifyOp(extractInt(buf.syscall, "syscall"))
+		fmt.Sscanf(fields["uid"], "%d", &event.UID)
+		event.Comm = strings.Trim(fields["comm"], "\"")
+		event.Exe = strings.Trim(fields["exe"], "\"")
+		fmt.Sscanf(fields["pid"], "%d", &event.PID)
+		if tidVal, ok := fields["tid"]; ok {
+			fmt.Sscanf(tidVal, "%d", &event.TID)
+		}
+		var sys int
+		fmt.Sscanf(fields["syscall"], "%d", &sys)
+		event.Op = identifyOp(sys)
 	}
 
 	// 2. Extract from PATH records
 	if len(buf.paths) > 0 {
-		// Usually index 0 or last index depending on syscall.
-		// For rename: index 2 is source, index 3 is dest.
-		if event.Op == "RENAME" && len(buf.paths) >= 4 {
-			event.Path = extractString(buf.paths[2], "name")
-			event.DestPath = extractString(buf.paths[3], "name")
+		if event.Op == "RENAME" {
+			// For rename: item=2 is source, item=3 is dest.
+			// Order is not guaranteed, so we check the "item" field.
+			for _, fields := range buf.pathsFields {
+				item := fields["item"]
+				if item == "2" {
+					event.Path = strings.Trim(fields["name"], "\"")
+				} else if item == "3" {
+					event.DestPath = strings.Trim(fields["name"], "\"")
+				}
+			}
 		} else {
-			// Fallback to the first path that matches or just the first path
-			event.Path = extractString(buf.paths[len(buf.paths)-1], "name")
+			// Fallback to the first path that matches a canary, or the last path record.
+			var path string
+			for _, fields := range buf.pathsFields {
+				p := strings.Trim(fields["name"], "\"")
+				if a.canaryMap[p] {
+					path = p
+					break
+				}
+			}
+			if path == "" {
+				// Last record often contains the actual file acted upon
+				lastFields := buf.pathsFields[len(buf.pathsFields)-1]
+				path = strings.Trim(lastFields["name"], "\"")
+			}
+			event.Path = path
 		}
 	}
 
 	// 3. Extract CWD
 	if buf.cwd != nil {
-		event.CWD = extractString(buf.cwd, "cwd")
+		event.CWD = strings.Trim(buf.cwdFields["cwd"], "\"")
 	}
 
 	a.emitChan <- event
@@ -278,12 +318,12 @@ func (a *Aggregator) emitPartial(key string) {
 	if len(buf.paths) == 0 {
 		return
 	}
-	
+
 	var path string
 	found := false
 	a.mu.Lock()
-	for _, pRec := range buf.paths {
-		p := strings.Trim(extractString(pRec, "name"), "\"")
+	for _, fields := range buf.pathsFields {
+		p := strings.Trim(fields["name"], "\"")
 		if a.canaryMap[p] {
 			path = p
 			found = true
@@ -291,7 +331,7 @@ func (a *Aggregator) emitPartial(key string) {
 		}
 	}
 	a.mu.Unlock()
-	
+
 	if !found {
 		return
 	}
@@ -304,37 +344,30 @@ func (a *Aggregator) emitPartial(key string) {
 		Path:       path,
 	}
 	if buf.syscall != nil {
-		event.UID = extractInt(buf.syscall, "uid")
-		event.Comm = extractString(buf.syscall, "comm")
-		event.Exe = extractString(buf.syscall, "exe")
-		event.Op = identifyOp(extractInt(buf.syscall, "syscall"))
+		fields := buf.syscallFields
+		fmt.Sscanf(fields["uid"], "%d", &event.UID)
+		event.Comm = strings.Trim(fields["comm"], "\"")
+		event.Exe = strings.Trim(fields["exe"], "\"")
+		var sys int
+		fmt.Sscanf(fields["syscall"], "%d", &sys)
+		event.Op = identifyOp(sys)
 	}
 	a.emitChan <- event
 }
 
-// 11.02a: Implementation of manual field extraction helpers
-func extractString(msg *auparse.AuditMessage, fieldName string) string {
-	return extractField(msg.RawData, fieldName)
-}
-
-func extractInt(msg *auparse.AuditMessage, fieldName string) int {
-	val := extractField(msg.RawData, fieldName)
-	var i int
-	fmt.Sscanf(val, "%d", &i)
-	return i
-}
-
+// extractField is kept for compatibility with manual recType fallback but uses auparse.Data internally if possible
 func extractField(data string, fieldName string) string {
+	// For fallback, we still use the old method if we don't have an AuditMessage yet
 	// Search for fieldName=
 	target := fieldName + "="
 	start := strings.Index(data, target)
 	if start == -1 {
 		return ""
 	}
-	
+
 	// Advance past the target
 	valStart := start + len(target)
-	
+
 	// If it's a quoted string, capture everything until the next quote
 	if valStart < len(data) && data[valStart] == '"' {
 		valStart++
@@ -344,7 +377,7 @@ func extractField(data string, fieldName string) string {
 		}
 		return data[valStart : valStart+end]
 	}
-	
+
 	// Otherwise, capture until the next space
 	end := strings.Index(data[valStart:], " ")
 	if end == -1 {
@@ -357,7 +390,7 @@ func (a *Aggregator) evictOldest() {
 	// Simple strategy for now: evict first map entry
 	for k := range a.buffers {
 		log.Printf("[auditmon] Backpressure: evicting event %s", k)
-		a.emitPartial(k) 
+		a.emitPartial(k)
 		break
 	}
 }
@@ -385,8 +418,14 @@ func identifyOp(sys int) string {
 		return "CHMOD"
 	case 92, 93, 94: // chown, fchown, lchown
 		return "CHOWN"
-	case 76, 77, 265, 266: // truncate, ftruncate
+	case 76, 77: // truncate, ftruncate
 		return "TRUNCATE"
+	case 88, 266: // symlink, symlinkat
+		return "SYMLINK"
+	case 86, 265: // link, linkat
+		return "LINK"
+	case 133, 259: // mknod, mknodat
+		return "MKNOD"
 	default:
 		return "OTHER"
 	}

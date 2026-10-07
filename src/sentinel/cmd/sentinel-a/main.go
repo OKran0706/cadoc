@@ -45,7 +45,6 @@ func main() {
 	devMode := flag.Bool("dev", false, "Run in development mode (skips auth/ingestion bootstrap)")
 	configPath := flag.String("config", "/opt/sentinel/config/sentinel.yaml", "Path to sentinel config")
 	joinToken := flag.String("join-token", "", "Initial vault bootstrap token")
-	testSign := flag.Bool("test-sign", false, "Sign a test event and exit")
 
 	// Canary Deployer subsystem flags
 	deployerProfile := flag.String("deployer-profile", "", "Canary profile (app-server, db-server, etc.)")
@@ -146,21 +145,7 @@ func main() {
 		ic = ingestclient.New(cfg.Watchdog.IngestionURL, tlsConfig)
 	}
 
-	if *testSign && s != nil {
-		envelope, _, err := s.SignEvent(map[string]interface{}{"test": "event"})
-		if err != nil {
-			log.Printf("[boot] Self-test sign failed: %v", err)
-		} else if payload, err := signer.MarshalEnvelope(envelope); err != nil {
-			log.Printf("[boot] Self-test marshal failed: %v", err)
-		} else {
-			fmt.Printf("Signed test event: %s ✓\n", envelope["signature"])
-			if err := ic.Post(ctx, payload); err != nil {
-				log.Fatalf("Test sign ingestion failed: %v", err)
-			}
-			fmt.Println("Test event successfully shipped to ingestion service ✓")
-			os.Exit(0)
-		}
-	}
+	// Self-test signing removed (flag deleted by user)
 
 	// 2. Runtime Binary Verification (Skip in dev for speed)
 	if _, _, err := sysutil.VerifySelfIntegrity("sentinel-a"); err != nil {
@@ -238,7 +223,7 @@ func main() {
 				log.Printf("[auditmon] Received event from consumer: id=%s path=%s op=%s", event.ID, event.Path, event.Op)
 				// Handler: Sign and ship the audit event
 				log.Printf("[auditmon] Signing event for path=%s", event.Path)
-				
+
 				eventType := "SENTINEL_FILE_TAMPER"
 				switch event.Op {
 				case "READ":
@@ -320,7 +305,8 @@ func main() {
 		go func() {
 			defer wg.Done()
 			deployer_daemon.StartDaemon(ctx, *deployerProfile, *deployerConfigDir, *deployerTemplateDir, *deployerInterval, *deployerMaxJitter, s, ic, func(paths []string) {
-				msg := "SET_MAP " + strings.Join(paths, ",")
+				b, _ := json.Marshal(paths)
+				msg := "SET_MAP " + string(b)
 				log.Printf("[boot] Broadcasting new canary map to workers: %s", msg)
 				auditmon.BroadcastControlMessage(msg)
 			})
@@ -465,7 +451,6 @@ func checkIngestionEndpoint(ctx context.Context, hc *http.Client, url string) er
 	}
 	return fmt.Errorf("unexpected status: %s", resp.Status)
 }
-
 
 func pollKillSwitch(ctx context.Context, cfg *config.Config, s *signer.Signer, ic *ingestclient.Client, verifier *auth.Verifier, vc *vault.Client, stateDir string) {
 	oobUrl := cfg.OOBAlert.URL

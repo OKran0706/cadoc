@@ -6,7 +6,7 @@ package auditmon
 import (
 	"bufio"
 	"context"
-	"fmt"
+	"encoding/json"
 	"log"
 	"net"
 	"strings"
@@ -97,26 +97,16 @@ func handleConnection(ctx context.Context, conn net.Conn, handler func(event *Au
 			continue
 		}
 
-		// Simple protocol for now: EVENT <ID> <CONFIDENCE> <PID> <PATH> <OP> [DESTPATH]
-		parts := strings.SplitN(line, " ", 7)
-		if len(parts) < 4 || parts[0] != "EVENT" {
+		// Protocol: EVENT <JSON_OBJECT>
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) < 2 || parts[0] != "EVENT" {
 			continue
 		}
 
-		event := &AuditEvent{
-			ID:         parts[1],
-			Confidence: Confidence(parts[2]),
-		}
-		fmt.Sscanf(parts[3], "%d", &event.PID)
-
-		if len(parts) >= 5 {
-			event.Path = parts[4]
-		}
-		if len(parts) >= 6 {
-			event.Op = parts[5]
-		}
-		if len(parts) >= 7 {
-			event.DestPath = parts[6]
+		event := &AuditEvent{}
+		if err := json.Unmarshal([]byte(parts[1]), event); err != nil {
+			log.Printf("[auditmon] Failed to unmarshal event: %v", err)
+			continue
 		}
 		
 		handler(event)

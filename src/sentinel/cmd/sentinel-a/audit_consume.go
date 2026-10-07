@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -21,8 +22,8 @@ import (
 func runAuditConsumer() {
 	log.Println("[audit-consume] Starting audispd plugin worker...")
 
-	// 1. Initialize Aggregator with 2s timeout and 10k buffer
-	agg := auditmon.NewAggregator(2*time.Second, 10000)
+	// 1. Initialize Aggregator with 2s timeout, 10k buffers, and 5k channel capacity
+	agg := auditmon.NewAggregator(2*time.Second, 10000, 5000)
 
 	// 2. Start Stdin consumer in background
 	go func() {
@@ -75,9 +76,14 @@ func handleSentinelConn(conn net.Conn, agg *auditmon.Aggregator) {
 		for {
 			select {
 			case event := <-agg.Events():
-				line := fmt.Sprintf("EVENT %s %s %d %s %s %s\n", event.ID, event.Confidence, event.PID, event.Path, event.Op, event.DestPath)
+				b, err := json.Marshal(event)
+				if err != nil {
+					log.Printf("[audit-consume] Failed to marshal event: %v", err)
+					continue
+				}
+				line := fmt.Sprintf("EVENT %s\n", string(b))
 				log.Printf("[audit-consume-debug] Sending to socket: %q", line)
-				_, err := fmt.Fprintf(conn, line)
+				_, err = fmt.Fprintf(conn, line)
 				if err != nil {
 					errChan <- err
 					return
@@ -94,7 +100,11 @@ func handleSentinelConn(conn net.Conn, agg *auditmon.Aggregator) {
 		for scanner.Scan() {
 			line := scanner.Text()
 			if strings.HasPrefix(line, "SET_MAP ") {
-				paths := strings.Split(line[8:], ",")
+				var paths []string
+				if err := json.Unmarshal([]byte(line[8:]), &paths); err != nil {
+					log.Printf("[audit-consume] Failed to unmarshal SET_MAP: %v", err)
+					continue
+				}
 				agg.SetWatchPaths(paths)
 			}
 		}
