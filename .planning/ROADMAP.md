@@ -2,6 +2,7 @@
 
 ## Milestones
 
+- ⬜ **v1.5 Code Quality & Reliability** — Phases 19-21 (target: 2026-05-15)
 - 🟡 **v1.4 Sentinel Hardening** — Phases 14-18 (target: 2026-04-25)
 - ✅ **v1.3 Auditd Transition** — Phases 11-13 (shipped 2026-04-22)
 - ✅ **v1.2 Unified Ingestion** — Phases 8-10 (shipped 2026-04-21)
@@ -9,6 +10,58 @@
 - ✅ **v1.0 Core Pipeline** — Phases 1-4 (shipped 2026-04-17)
 
 ## Phases
+
+<details open>
+<summary>⬜ v1.5 Code Quality & Reliability (Phases 19-21)</summary>
+
+Derived from Phase 18 code review (19 findings: 4 Critical, 9 Warning, 6 Info).
+
+- [x] **Phase 19: Critical Safety Fixes** _(CR-001 to CR-004)_
+  - Goal: Eliminate goroutine leaks, TOCTOU races, and silently ignored security-sensitive errors.
+  - Findings: CR-001 (goroutine leak in `audit_consume`), CR-002 (TOCTOU in `emitPartial`), CR-003 (ignored `PersistPublicCerts`), CR-004 (ignored `SetTLSConfig`)
+  - Files: `audit_consume.go`, `aggregator.go`, `main.go`
+  - Success Criteria:
+    - All goroutines in `handleSentinelConn` are cancelled via context, not `stopForwarding` channel.
+    - `emitPartial` holds the mutex across the entire gate-check-and-delete operation.
+    - `PersistPublicCerts` and `SetTLSConfig` errors cause `log.Fatalf` (not silent ignore).
+    - E2E test passes after changes.
+
+- [x] **Phase 20: Operational Reliability Fixes** _(WR-001 to WR-009)_
+  - Goal: Fix the 9 warning-level issues affecting heartbeat stability, deployer safety, and IPC robustness.
+  - Findings:
+    - WR-001: Ignored `ic.Post` in `selfmon.go`
+    - WR-002: Heartbeat goroutine exits on sign error (`return` → `continue`)
+    - WR-003: `auditctl ClearAll` deletes all rules (not just by key)
+    - WR-004: `handleConnection` has no read deadline
+    - WR-005: Deployer removes old canaries before confirming new ones
+    - WR-006: Package-level global state in `server.go`
+    - WR-007: `blendTimestamp` silent no-op on empty dir
+    - WR-008: Forwarding goroutine error path logs misleading message
+    - WR-009: Vault error detection by string matching is fragile
+  - Files: `selfmon.go`, `main.go`, `auditctl.go`, `server.go`, `daemon.go`, `deployer.go`, `vault/client.go`
+  - Success Criteria:
+    - Heartbeat goroutine continues after transient signing error.
+    - Deployer maintains at least one canary set deployed at all times.
+    - Vault errors use typed `api.ResponseError` assertions.
+    - All `ic.Post` calls check return values.
+
+- [ ] **Phase 21: Hardening & Defence-in-Depth** _(IN-001 to IN-006)_
+  - Goal: Address the 6 info-level findings that improve correctness and long-term security posture.
+  - Findings:
+    - IN-001: `extractAuditID` returns `"unknown"` — causes buffer key collision
+    - IN-002: `os.Exit(0)` in `pollKillSwitch` bypasses deferred cleanup
+    - IN-003: `FakeSSHKeyBody` uses predictable time-based fallback entropy
+    - IN-004: Unix socket accepts connections without peer credential check
+    - IN-005: `config.go` has no validation of required fields
+    - IN-006: Target directory created with world-executable `0755` permissions
+  - Files: `aggregator.go`, `main.go`, `deployer.go`, `server.go`, `config.go`
+  - Success Criteria:
+    - Unknown audit IDs are dropped (not merged under `"unknown"` key).
+    - Kill switch triggers graceful shutdown via `cancel()` not `os.Exit`.
+    - Config `Validate()` rejects missing `ingestion_url` at startup.
+    - Canary directories created with `0700` permissions.
+
+</details>
 
 <details open>
 <summary>🟡 v1.4 Sentinel Hardening (Phases 14-18)</summary>
@@ -95,15 +148,18 @@
 
 ## Progress
 
-| Phase             | Milestone | Plans | Status   | Completed  |
-| ----------------- | --------- | ----- | -------- | ---------- |
-| 18. Prod Ready   | v1.4      | 1/1   | Complete | 2026-04-26 |
-| 17. Graceful Exit | v1.4      | 0/1   | Pending  | -          |
-| 16. Sec & Kill    | v1.4      | 0/1   | Pending  | -          |
-| 15. Err Hardening | v1.4      | 0/1   | Pending  | -          |
-| 14. Boot Foundat  | v1.4      | 0/1   | Pending  | -          |
-| 13. Auditd Pivot  | v1.3      | 4/4   | Complete | 2026-04-22 |
-| ...               | ...       | ...   | ...      | ...        |
+| Phase                    | Milestone | Plans | Status   | Completed  |
+| ------------------------ | --------- | ----- | -------- | ---------- |
+| 21. Hardening & Defence  | v1.5      | 0/1   | Pending  | -          |
+| 20. Operational Reliab.  | v1.5      | 4/4   | Complete | 2026-05-08 |
+| 19. Critical Safety      | v1.5      | 2/2   | Complete | 2026-05-08 |
+| 18. Prod Ready           | v1.4      | 1/1   | Complete | 2026-04-26 |
+| 17. Graceful Exit        | v1.4      | 0/1   | Pending  | -          |
+| 16. Sec & Kill           | v1.4      | 0/1   | Pending  | -          |
+| 15. Err Hardening        | v1.4      | 0/1   | Pending  | -          |
+| 14. Boot Foundat         | v1.4      | 0/1   | Pending  | -          |
+| 13. Auditd Pivot         | v1.3      | 4/4   | Complete | 2026-04-22 |
+| ...                      | ...       | ...   | ...      | ...        |
 
 ## Backlog
 
