@@ -306,33 +306,33 @@ func (a *Aggregator) checkTimeouts() {
 
 func (a *Aggregator) emitPartial(key string) {
 	a.mu.Lock()
+
 	buf, ok := a.buffers[key]
 	if !ok {
 		a.mu.Unlock()
 		return
 	}
 	delete(a.buffers, key)
-	a.mu.Unlock()
 
-	// C-02: Gate partial events on canaryMap — same requirement as isComplete().
+	// C-02: Gate partial events on canaryMap (same requirement as isComplete).
+	// Must check BEFORE releasing the lock to avoid TOCTOU with SetWatchPaths.
 	if len(buf.paths) == 0 {
+		a.mu.Unlock()
 		return
 	}
 
 	var path string
-	found := false
-	a.mu.Lock()
 	for _, fields := range buf.pathsFields {
 		p := strings.Trim(fields["name"], "\"")
 		if a.canaryMap[p] {
 			path = p
-			found = true
 			break
 		}
 	}
 	a.mu.Unlock()
 
-	if !found {
+	// Nothing to emit if path not in canary map
+	if path == "" {
 		return
 	}
 
@@ -354,6 +354,7 @@ func (a *Aggregator) emitPartial(key string) {
 	}
 	a.emitChan <- event
 }
+
 
 // extractField is kept for compatibility with manual recType fallback but uses auparse.Data internally if possible
 func extractField(data string, fieldName string) string {
