@@ -15,9 +15,10 @@ $env:GOOS=""
 $env:GOARCH=""
 Remove-Item -Force scripts/e2e-success.tmp -ErrorAction Ignore
 Remove-Item -Force scripts/mock-server.log -ErrorAction Ignore
+Remove-Item -Force scripts/mock-server-err.log -ErrorAction Ignore
 
 # Start the mock server in the background
-$mockProcess = Start-Process -FilePath "go" -ArgumentList "run mock-server.go" -WorkingDirectory "scripts" -RedirectStandardOutput "scripts\mock-server.log" -PassThru -WindowStyle Hidden
+$mockProcess = Start-Process -FilePath "go" -ArgumentList "run mock-server.go" -WorkingDirectory "scripts" -RedirectStandardOutput "scripts\mock-server.log" -RedirectStandardError "scripts\mock-server-err.log" -PassThru -WindowStyle Hidden
 
 Write-Host "Waiting for mock server to start..."
 Start-Sleep -Seconds 2
@@ -49,11 +50,14 @@ type=PATH msg=audit(1714295828.000:123): item=0 name=`"/etc/shadow`" inode=1234 
     Write-Host "=== Verifying Event Reception ==="
     Start-Sleep -Seconds 2
 
-    $logContent = Get-Content scripts\mock-server.log -Raw
-    if ($logContent -match "Received event") {
+    $logContent = Get-Content scripts\mock-server.log -ErrorAction Ignore
+    $errLogContent = Get-Content scripts\mock-server-err.log -ErrorAction Ignore
+    $allLogs = "$logContent`n$errLogContent"
+
+    if ($allLogs -match "Received event") {
         Write-Host "------------------------------------------------"
         Write-Host "SUCCESS: E2E Test Passed. Event was received by mock server."
-        Select-String -Pattern "Received event" -Path scripts\mock-server.log
+        Write-Host $allLogs | Select-String -Pattern "Received event"
         Write-Host "------------------------------------------------"
         exit 0
     } else {
