@@ -53,8 +53,10 @@ func (m *AuditctlManager) RemoveWatch(path string) error {
 
 // ClearAll removes all rules associated with this manager's key.
 func (m *AuditctlManager) ClearAll() error {
-	// auditctl -D deletes all rules, but we can filter by key
-	cmd := exec.Command("auditctl", "-k", m.key, "-D")
+	// auditctl -D deletes ALL rules on the system. To delete only our rules safely,
+	// we list them and delete each one by exact string match.
+	script := fmt.Sprintf("auditctl -l | grep ' -k %s' | while read -r rule; do auditctl -d $rule; done", m.key)
+	cmd := exec.Command("sh", "-c", script)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		// Ignore errors if no rules found
 		if !strings.Contains(string(out), "No rules") {

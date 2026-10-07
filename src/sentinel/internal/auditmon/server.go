@@ -11,6 +11,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 	"github.com/your-org/canary/sentinel/internal/sysutil"
 )
 
@@ -90,7 +91,11 @@ func handleConnection(ctx context.Context, conn net.Conn, handler func(event *Au
 	log.Printf("[auditmon-debug] New connection from consumer: %v", conn.RemoteAddr())
 	defer conn.Close()
 	scanner := bufio.NewScanner(conn)
-	for scanner.Scan() {
+	for {
+		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		if !scanner.Scan() {
+			break
+		}
 		line := scanner.Text()
 		log.Printf("[auditmon-debug] Raw IPC line: %q", line)
 		if line == "" {
