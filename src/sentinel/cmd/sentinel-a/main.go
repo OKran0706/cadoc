@@ -132,11 +132,17 @@ func main() {
 
 		// 1d. Persist State (Public Only)
 		if *joinToken != "" {
-			_ = sysutil.PersistPublicCerts(stateDir, certCA, certClient)
+			if err := sysutil.PersistPublicCerts(stateDir, certCA, certClient); err != nil {
+				log.Fatalf("Failed to persist certificates to %s: %v — restart recovery will be impossible", stateDir, err)
+			}
+			log.Printf("Certificates persisted to %s", stateDir)
 		}
 
 		// 1e. Finalize Client Initialization
-		_ = vaultClient.SetTLSConfig(tlsConfig)
+		if err := vaultClient.SetTLSConfig(tlsConfig); err != nil {
+			log.Fatalf("Failed to apply TLS config to Vault client: %v", err)
+		}
+
 		s, err = signer.New(cfg.Signing, vaultClient)
 		if err != nil {
 			log.Fatalf("Signer init failed: %v", err)
