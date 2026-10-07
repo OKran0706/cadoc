@@ -72,7 +72,9 @@ func Start(ctx context.Context, selfPID int, s *signer.Signer, ic *ingestclient.
 	} else if payload, err := signer.MarshalEnvelope(envelope); err != nil {
 		log.Printf("[selfmon] Failed to marshal mode-selection envelope: %v", err)
 	} else {
-		ic.Post(ctx, payload)
+		if err := ic.Post(ctx, payload); err != nil {
+			log.Printf("[selfmon] Failed to post mode-selection event: %v", err)
+		}
 	}
 
 	switch env {
@@ -91,7 +93,9 @@ func Start(ctx context.Context, selfPID int, s *signer.Signer, ic *ingestclient.
 			} else if pay, err := signer.MarshalEnvelope(envelope); err != nil {
 				log.Printf("[selfmon] Failed to marshal subsystem event: %v", err)
 			} else {
-				ic.Post(ctx, pay)
+				if err := ic.Post(ctx, pay); err != nil {
+					log.Printf("[selfmon] Failed to post subsystem event: %v", err)
+				}
 			}
 		})
 		return nil

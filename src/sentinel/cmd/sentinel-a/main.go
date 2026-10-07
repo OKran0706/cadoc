@@ -367,8 +367,8 @@ func main() {
 				}
 				envelope, _, err := s.SignEvent(event)
 				if err != nil {
-					log.Printf("[selfmon] Failed to sign tamper event: %v", err)
-					return
+					log.Printf("[selfmon] Failed to sign heartbeat event: %v", err)
+					continue
 				}
 				payload, err := signer.MarshalEnvelope(envelope)
 				if err != nil {
