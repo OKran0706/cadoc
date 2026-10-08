@@ -101,5 +101,20 @@ func Load(path string) (*Config, error) {
 		cfg.Watchdog.MaintenanceVaultField = "ed25519_pubkey"
 	}
 
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
 	return &cfg, nil
+}
+
+// Validate checks that required configuration fields are present.
+func (c *Config) Validate() error {
+	if c.Watchdog.IngestionURL == "" {
+		return fmt.Errorf("watchdog.ingestion_url is required")
+	}
+	if c.Signing.KeySource == "" {
+		return fmt.Errorf("signing.key_source is required")
+	}
+	return nil
 }

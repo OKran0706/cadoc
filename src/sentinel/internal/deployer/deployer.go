@@ -85,12 +85,7 @@ func (td TemplateData) RandomHex(n int) string {
 func (td TemplateData) FakeSSHKeyBody() string {
 	buf := make([]byte, 256)
 	if _, err := rand.Read(buf); err != nil {
-		log.Printf("[deployer] WARNING: rand.Read failed in FakeSSHKeyBody: %v. Using time-based seed.", err)
-		// Fallback: fill with something non-zero if rand fails
-		now := time.Now().UnixNano()
-		for i := 0; i < len(buf); i++ {
-			buf[i] = byte(now >> (i % 8 * 8))
-		}
+		log.Fatalf("Critical entropy failure during FakeSSHKeyBody generation: %v", err)
 	}
 	return base64.StdEncoding.EncodeToString(buf)
 }
@@ -167,7 +162,7 @@ func Deploy(profile *Profile, templateDir string, dryRun bool) ([]CanaryEntry, e
 			}
 
 			// Ensure target directory exists
-			if err := os.MkdirAll(target.Path, 0755); err != nil {
+			if err := os.MkdirAll(target.Path, 0700); err != nil {
 				return nil, fmt.Errorf("create target directory %s: %w", target.Path, err)
 			}
 
