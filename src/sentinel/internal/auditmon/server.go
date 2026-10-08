@@ -28,6 +28,9 @@ func NewServer() *Server {
 }
 
 // Start listens on a Unix socket for events forwarded by the audit consumer plugin.
+// Security Model: Authentication is implicitly handled by the OS filesystem permissions.
+// The socket directory (/run/canary) is set to 0700 and the socket to 0660, restricting
+// access to the root user and the canary group.
 func (s *Server) Start(ctx context.Context, socketPath string, handler func(event *AuditEvent)) error {
 	listener, err := sysutil.ListenUnix(ctx, socketPath, 0660)
 	if err != nil {

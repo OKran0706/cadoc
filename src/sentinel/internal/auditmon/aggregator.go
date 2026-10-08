@@ -172,11 +172,11 @@ func extractAuditID(raw string) string {
 	// msg=audit(17137123.123:456)
 	start := strings.Index(raw, "audit(")
 	if start == -1 {
-		return "unknown"
+		return fmt.Sprintf("unknown-%d", time.Now().UnixNano())
 	}
 	end := strings.Index(raw[start:], ")")
 	if end == -1 {
-		return "unknown"
+		return fmt.Sprintf("unknown-%d", time.Now().UnixNano())
 	}
 	return raw[start+6 : start+end]
 }

@@ -349,7 +349,7 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		pollKillSwitch(ctx, cfg, s, ic, ticketVerifier, vaultClient, stateDir)
+		pollKillSwitch(ctx, cancel, cfg, s, ic, ticketVerifier, vaultClient, stateDir)
 	}()
 
 	// Main event loop: emit heartbeats and collect events from local sources
@@ -462,7 +462,7 @@ func checkIngestionEndpoint(ctx context.Context, hc *http.Client, url string) er
 	return fmt.Errorf("unexpected status: %s", resp.Status)
 }
 
-func pollKillSwitch(ctx context.Context, cfg *config.Config, s *signer.Signer, ic *ingestclient.Client, verifier *auth.Verifier, vc *vault.Client, stateDir string) {
+func pollKillSwitch(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, s *signer.Signer, ic *ingestclient.Client, verifier *auth.Verifier, vc *vault.Client, stateDir string) {
 	oobUrl := cfg.OOBAlert.URL
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
@@ -545,7 +545,8 @@ func pollKillSwitch(ctx context.Context, cfg *config.Config, s *signer.Signer, i
 			}
 
 			log.Println("KILL SWITCH TRIGGERED — SHUTTING DOWN")
-			os.Exit(0)
+			cancel() // triggers graceful shutdown
+			return
 		}
 	}
 }
