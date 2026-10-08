@@ -45,7 +45,7 @@ Derived from Phase 18 code review (19 findings: 4 Critical, 9 Warning, 6 Info).
     - Vault errors use typed `api.ResponseError` assertions.
     - All `ic.Post` calls check return values.
 
-- [ ] **Phase 21: Hardening & Defence-in-Depth** _(IN-001 to IN-006)_
+- [x] **Phase 21: Hardening & Defence-in-Depth** _(IN-001 to IN-006)_
   - Goal: Address the 6 info-level findings that improve correctness and long-term security posture.
   - Findings:
     - IN-001: `extractAuditID` returns `"unknown"` — causes buffer key collision
@@ -150,7 +150,7 @@ Derived from Phase 18 code review (19 findings: 4 Critical, 9 Warning, 6 Info).
 
 | Phase                    | Milestone | Plans | Status   | Completed  |
 | ------------------------ | --------- | ----- | -------- | ---------- |
-| 21. Hardening & Defence  | v1.5      | 0/1   | Pending  | -          |
+| 21. Hardening & Defence  | v1.5      | 2/2   | Complete | 2026-05-08 |
 | 20. Operational Reliab.  | v1.5      | 4/4   | Complete | 2026-05-08 |
 | 19. Critical Safety      | v1.5      | 2/2   | Complete | 2026-05-08 |
 | 18. Prod Ready           | v1.4      | 1/1   | Complete | 2026-04-26 |
