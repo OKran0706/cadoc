@@ -10,7 +10,8 @@ Asymmetric cost: It must be cheap for an admin to deploy, but extremely expensiv
 
 ## Current State
 
-- **Milestone v1.4 Active**: Sentinel-A hardening, graceful shutdown, and structured error handling.
+- **Milestone v1.5 Shipped (2026-05-08)**: Code quality hardening, concurrency safety, and operational reliability fixes (resolved 19 audit findings).
+- **Milestone v1.4 Shipped (2026-05-08)**: Sentinel-A production hardening, graceful shutdown, and structured error handling.
 - **Milestone v1.3 Shipped (2026-04-22)**: Zero-dependency Auditd-only architecture with live rule injection and resilient IPC.
 - **Milestone v1.2 Shipped (2026-04-21)**: Unified telemetry pipeline with horizontal ingestion scaling and mTLS verification.
 - **Milestone v1.1 Shipped (2026-04-21)**: Sentinel-A daemonized with hybrid credential persistence and resilient Vault polling.
@@ -20,6 +21,9 @@ Asymmetric cost: It must be cheap for an admin to deploy, but extremely expensiv
 
 ### Validated
 
+- ✓ Production-grade Concurrency & Safety (Zero leaks/races) — v1.5
+- ✓ Defensive Hardening (Restricted permissions, Unique IDs) — v1.5
+- ✓ Graceful Shutdown & Context Cancellation — v1.5
 - ✓ Native Auditd record reassembly (`libaudit`) — v1.3
 - ✓ Live Auditctl rule injection (Zero-Disk) — v1.3
 - ✓ Resilient IPC with exponential backoff — v1.3
@@ -27,11 +31,6 @@ Asymmetric cost: It must be cheap for an admin to deploy, but extremely expensiv
 
 ### Active
 
-- [ ] **v1.4: Sentinel Hardening & Refactoring**
-  - [ ] Graceful shutdown and goroutine lifecycle management
-  - [ ] Structured Vault error handling and strict error checking
-  - [ ] Shared HTTP client with context support
-  - [ ] Capability drop order and privileged op audit
 - [ ] Automated Canary Placement (Policy Engine)
 - [ ] Multi-Tenant Ingestion Isolation
 - [ ] Hardware-backed Key Storage (TPM 2.0 Integration)
@@ -43,15 +42,16 @@ Asymmetric cost: It must be cheap for an admin to deploy, but extremely expensiv
 
 ## Context
 
-Shipped v1.3 with a pure Auditd model, eliminating the need for eBPF or Tetragon. Sentinel-A now operates with minimal capabilities (`CAP_NET_ADMIN`, `CAP_SYS_RESOURCE`) and manages rules in live memory only.
+Shipped v1.5 after a rigorous production readiness review (Phase 18). The daemon now operates with strict error propagation, graceful lifecycle management, and a hardened IPC server. This marks the transition from "functional prototype" to "production-grade reliability."
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
+| Focus on Reliability | Phase 18 audit revealed concurrency and lifecycle gaps that were prioritized over new features | ✅ v1.5 |
 | Pivot to Auditd-Only | Removes high-privilege eBPF requirements and improves compatibility across kernels | ✅ v1.3 |
 | Live Rule Injection | Maintains zero-disk constraint for security | ✅ v1.3 |
 | Unified Ingestion | Decouples agents from Kafka complexity and simplifies mTLS trust management | ✅ v1.1 |
 
 ---
-*Last updated: 2026-04-22 after v1.3 milestone*
+*Last updated: 2026-05-08 after v1.5 milestone*
