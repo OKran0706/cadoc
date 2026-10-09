@@ -2,8 +2,27 @@
 
 ## Milestones
 
+- ⬜ **v1.6 Trusted Identity & Orchestration** — Phases 22-24 (target: 2026-05-30)
 - ✅ **v1.5 Code Quality & Reliability** — Phases 19-21 (shipped 2026-05-08) — [Archive](file:///.planning/milestones/v1.5-ROADMAP.md)
 - ✅ **v1.4 Sentinel Hardening** — Phases 14-18 (shipped 2026-05-08) — [Archive](file:///.planning/milestones/v1.5-ROADMAP.md)
+
+## Phases
+
+<details open>
+<summary>⬜ v1.6 Trusted Identity & Orchestration (Phases 22-24)</summary>
+
+- [ ] **Phase 22: Secure Identity Bootstrapping**
+  - Goal: Implement the brokered AppRole handshake and log redaction.
+  - Requirements: AUTH-01, AUTH-02, AUTH-03, AUTH-04, OPS-01, OPS-02
+  - Success Criteria:
+    - Sentinel logs in to Vault using a SecretID brokered by the Ingestion API.
+    - Sensitive headers and tokens are redacted from all Sentinel logs.
+    - Deployment script supports one-time join tokens.
+
+- [ ] **Phase 23: Dynamic PKI Integration**
+- [ ] **Phase 24: Operational Resilience (Lease Management)**
+
+</details>
 - ✅ **v1.3 Auditd Transition** — Phases 11-13 (shipped 2026-04-22)
 - ✅ **v1.2 Unified Ingestion** — Phases 8-10 (shipped 2026-04-21)
 - ✅ **v1.1 Sentinel Resilience** — Phases 5-7 (shipped 2026-04-21)
@@ -94,6 +113,7 @@
 
 | Phase                    | Milestone | Plans | Status   | Completed  |
 | ------------------------ | --------- | ----- | -------- | ---------- |
+| 22. Identity Bootstrap   | v1.6      | 0/1   | Pending  | -          |
 | 21. Hardening & Defence  | v1.5      | 2/2   | Complete | 2026-05-08 |
 | 20. Operational Reliab.  | v1.5      | 4/4   | Complete | 2026-05-08 |
 | 19. Critical Safety      | v1.5      | 2/2   | Complete | 2026-05-08 |
