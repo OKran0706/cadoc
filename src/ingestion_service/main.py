@@ -4,18 +4,28 @@ import json
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
+from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Header
 from pydantic import BaseModel
 from aiokafka import AIOKafkaProducer
 
 from crypto import verify_signature, verify_timestamp
 from liveness import LivenessManager
+from bootstrap import (
+    BootstrapJoinRequest,
+    verify_user_jwt,
+    check_rbac,
+    mint_join_token,
+    fetch_sentinel_credentials,
+)
 
 # Configuration
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "canary-events")
-ORG_PUBLIC_KEY = os.getenv("ORG_PUBLIC_KEY", "") # Placeholder if not set
+ORG_PUBLIC_KEY = os.getenv("ORG_PUBLIC_KEY", "")  # Placeholder if not set
+VAULT_ADDR = os.getenv("VAULT_ADDR", "http://127.0.0.1:8200")
+VAULT_ADMIN_TOKEN = os.getenv("VAULT_ADMIN_TOKEN", "")
+JWT_SECRET = os.getenv("JWT_SECRET", "")
 
 # Initialization
 logging.basicConfig(level=logging.INFO)
@@ -110,3 +120,49 @@ async def handle_ingest(envelope: IngestEnvelope, background_tasks: BackgroundTa
 @app.get("/health")
 def health():
     return {"status": "ok", "kafka_connected": state.producer is not None}
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap endpoints — Sentinel identity issuance
+# ---------------------------------------------------------------------------
+
+@app.post("/bootstrap/join", status_code=200)
+async def bootstrap_join(
+    request: BootstrapJoinRequest,
+    authorization: str = Header(default=""),
+):
+    """
+    Protected endpoint: issues a 15-min one-time Join Token for Sentinel bootstrapping.
+    Requires a valid User Login JWT in Authorization: Bearer <jwt>.
+    RBAC check validates the user's permission to bootstrap client_id on server_id.
+    """
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
+    user_token = authorization.removeprefix("Bearer ")
+    jwt_payload = verify_user_jwt(user_token)
+    if not check_rbac(jwt_payload, request.client_id, request.server_id):
+        raise HTTPException(status_code=403, detail="Insufficient permissions to bootstrap this sentinel")
+    join_token = mint_join_token(request.client_id, request.server_id)
+    logger.info(
+        "BOOTSTRAP_JOIN: issued join token for client=%s server=%s user=%s",
+        request.client_id, request.server_id, jwt_payload.get("sub"),
+    )
+    return {"join_token": join_token, "expires_in": 900}
+
+
+@app.post("/bootstrap/get_credentials", status_code=200)
+async def bootstrap_get_credentials(
+    authorization: str = Header(default=""),
+):
+    """
+    Semi-protected endpoint: exchanges a Join Token for mTLS credentials.
+    Authorization: Bearer <join_token>
+    Returns ca_cert, client_cert, client_key as JSON.
+    The join token is one-time-use — subsequent calls with the same token return 403.
+    """
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer join token")
+    join_token = authorization.removeprefix("Bearer ")
+    credentials = fetch_sentinel_credentials(join_token, client_id="")
+    logger.info("BOOTSTRAP_GET_CREDENTIALS: credentials issued successfully")
+    return credentials

@@ -85,60 +85,72 @@ func main() {
 		ic = ingestclient.New(cfg.Watchdog.IngestionURL, nil)
 	} else {
 		// --- PRODUCTION BOOTSTRAP ---
-		// 1a. Resolve Vault Token
+		// 1a. Resolve Join Token (CLI flag takes precedence over env var)
 		if *joinToken == "" {
 			*joinToken = os.Getenv("SENTINEL_JOIN_TOKEN")
 		}
 
-		// 1b. Initialize Vault Client
+		// 1b. Initialize Vault Client (used for recovery path and killswitch polling)
 		vaultClient, err = vault.New()
 		if err != nil {
 			log.Fatalf("Failed to initialize Vault client: %v", err)
 		}
 
+		var certCA, certClient []byte
+
 		if *joinToken != "" {
-			// Fresh bootstrap path
-			vaultClient.SetToken(*joinToken)
-			if err := sysutil.UnwrapVaultToken(vaultClient, *joinToken, "Sentinel-A"); err != nil {
-				log.Printf("Vault unwrapping: %v (skipping if session already active)", err)
+			// --- FRESH BOOTSTRAP PATH ---
+			// Contact the Ingestion Service to exchange the Join Token for an mTLS
+			// credential package. The Ingestion Service brokers all Vault interaction;
+			// the Sentinel never contacts Vault directly during enrollment.
+			log.Printf("[boot] Join token provided — bootstrapping identity from Ingestion Service: %s", cfg.Watchdog.IngestionURL)
+			certCA, certClient, err = auth.BootstrapFromIngestionService(ctx, cfg.Watchdog.IngestionURL, *joinToken, stateDir)
+			if err != nil {
+				log.Fatalf("[boot] Bootstrap failed: %v", err)
+			}
+
+			// Persist public certs for restart recovery.
+			// auth.InMemoryClientKey holds the private key — it is NEVER persisted.
+			if err := sysutil.PersistPublicCerts(stateDir, certCA, certClient); err != nil {
+				log.Fatalf("[boot] Failed to persist certificates to %s: %v — restart recovery will be impossible", stateDir, err)
+			}
+			log.Printf("[boot] Public certificates persisted to %s (private key in-memory only)", stateDir)
+
+			// Build TLS config from in-memory private key + fetched public certs.
+			tlsConfig, err = sysutil.BuildTLSConfigFromBytes(certCA, certClient, auth.InMemoryClientKey)
+			if err != nil {
+				log.Fatalf("[boot] Failed to build TLS config from bootstrap credentials: %v", err)
 			}
 		} else {
-			// Recovery path (No join token — attempting cert-based recovery)
-			// Ensure certificates are present (recovery path)
-			if err := auth.EnsureCertificates(ctx, cfg.Watchdog.IngestionURL); err != nil {
-				log.Fatalf("Authentication failure: %v", err)
+			// --- RECOVERY PATH (restart without join token) ---
+			// Use persisted public certs + Vault cert auth to re-acquire a session.
+			// The private key was never on disk; Vault's cert auth engine validates
+			// the presented client certificate instead.
+			log.Println("[boot] No join token — attempting mTLS recovery from persisted certificates")
+			certCA, certClient, err = sysutil.LoadPersistedCerts(stateDir)
+			if err != nil {
+				log.Fatalf("[boot] No certificates found in %s — cannot authenticate. Re-bootstrap with a new join token is required: %v", stateDir, err)
 			}
 
-			// Initial mTLS recovery
-			if _, _, err := sysutil.LoadPersistedCerts(stateDir); err != nil {
-				log.Fatalf("No certificates found in %s — cannot authenticate: %v", stateDir, err)
+			// Build TLS config from persisted public certs (disk fallback for recovery).
+			tlsConfig, certCA, certClient, err = sysutil.LoadTLSConfig(cfg.Telemetry, vaultClient, true)
+			if err != nil {
+				log.Fatalf("[boot] Failed to load TLS config for recovery: %v", err)
 			}
+
+			// Apply TLS config to Vault client before attempting cert login.
+			if err := vaultClient.SetTLSConfig(tlsConfig); err != nil {
+				log.Fatalf("[boot] Failed to apply TLS config to Vault client: %v", err)
+			}
+
+			// Re-authenticate with Vault using the persisted mTLS client certificate.
+			if _, err := vaultClient.LoginWithCert(); err != nil {
+				log.Fatalf("[boot] mTLS cert login failed — certificates may be expired or revoked. Re-bootstrap with a new join token is required: %v", err)
+			}
+			log.Println("[boot] mTLS recovery successful ✓")
 		}
 
-		// 1c. Load Final TLS Configuration
-		var certCA, certClient []byte
-		log.Println("Loading final TLS session credentials from Vault...")
-		for i := 0; i < 10; i++ {
-			tlsConfig, certCA, certClient, err = sysutil.LoadTLSConfig(cfg.Telemetry, vaultClient, *joinToken == "")
-			if err == nil {
-				break
-			}
-			log.Printf("Awaiting secrets in Vault (attempt %d/10): %v", i+1, err)
-			time.Sleep(5 * time.Second)
-		}
-		if err != nil {
-			log.Fatalf("Failed to initialize final TLS session: %v", err)
-		}
-
-		// 1d. Persist State (Public Only)
-		if *joinToken != "" {
-			if err := sysutil.PersistPublicCerts(stateDir, certCA, certClient); err != nil {
-				log.Fatalf("Failed to persist certificates to %s: %v — restart recovery will be impossible", stateDir, err)
-			}
-			log.Printf("Certificates persisted to %s", stateDir)
-		}
-
-		// 1e. Finalize Client Initialization
+		// 1e. Finalize client initialization (applies to both paths)
 		if err := vaultClient.SetTLSConfig(tlsConfig); err != nil {
 			log.Fatalf("Failed to apply TLS config to Vault client: %v", err)
 		}
@@ -150,6 +162,7 @@ func main() {
 
 		ic = ingestclient.New(cfg.Watchdog.IngestionURL, tlsConfig)
 	}
+
 
 	// Self-test signing removed (flag deleted by user)
 

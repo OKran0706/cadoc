@@ -177,6 +177,40 @@ func LoadTLSConfig(cfg config.TelemetryConfig, vc *vault.Client, diskFallback bo
 	return tlsConfig, caCertData, clientCertData, nil
 }
 
+// BuildTLSConfigFromBytes constructs a tls.Config from raw PEM bytes.
+// Used during fresh bootstrap when the private key is held in memory (never on disk).
+//
+//   - caCert:     PEM CA certificate bytes (sets RootCAs for server verification)
+//   - clientCert: PEM client certificate bytes
+//   - clientKey:  PEM private key bytes — in-memory ONLY, caller must never write this to disk
+func BuildTLSConfigFromBytes(caCert, clientCert, clientKey []byte) (*tls.Config, error) {
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	}
+
+	if len(caCert) > 0 {
+		caCertPool := x509.NewCertPool()
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("BuildTLSConfigFromBytes: failed to parse CA certificate PEM")
+		}
+		tlsConfig.RootCAs = caCertPool
+	}
+
+	if len(clientCert) > 0 && len(clientKey) > 0 {
+		cert, err := tls.X509KeyPair(clientCert, clientKey)
+		if err != nil {
+			return nil, fmt.Errorf("BuildTLSConfigFromBytes: failed to load client key pair: %w", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{cert}
+	} else if len(clientCert) > 0 || len(clientKey) > 0 {
+		return nil, fmt.Errorf("BuildTLSConfigFromBytes: both client cert and key must be provided together")
+	}
+
+	return tlsConfig, nil
+}
+
+
+
 // PersistPublicCerts writes the CA and mTLS public certificates to disk
 // using atomic write (write-to-temp + rename) to prevent corruption.
 // The private key is NEVER written — this function only handles public material.
