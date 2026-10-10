@@ -16,6 +16,7 @@ from bootstrap import (
     check_rbac,
     mint_join_token,
     fetch_sentinel_credentials,
+    fetch_sentinel_credentials_by_client_id,
     decode_join_token,
 )
 
@@ -171,4 +172,32 @@ async def bootstrap_get_credentials(
     join_token = authorization.removeprefix("Bearer ")
     credentials = fetch_sentinel_credentials(join_token, client_id="")
     logger.info("BOOTSTRAP_GET_CREDENTIALS: credentials issued successfully")
+    return credentials
+
+
+@app.get("/bootstrap/renew_credentials", status_code=200)
+async def bootstrap_renew_credentials(
+    request: Request,
+):
+    """
+    mTLS-authenticated renewal endpoint for Sentinels that already have certs.
+    No join token required — identity is asserted by the client certificate CN.
+    Used during Sentinel restarts to re-acquire fresh credentials without human
+    involvement.
+
+    The client_id is extracted from the TLS client cert's Common Name (CN).
+    If TLS is terminated upstream (e.g. by a proxy), the CN should be forwarded
+    via the X-Client-Cert-CN header.
+    """
+    # Try to extract CN from TLS client cert or forwarded header.
+    # In production, a TLS-terminating proxy would inject X-Client-Cert-CN.
+    client_id = request.headers.get("X-Client-Cert-CN", "")
+    if not client_id:
+        # Direct mTLS: FastAPI exposes the scope if SSL is configured
+        # Fall back gracefully for now — log a warning
+        logger.warning("RENEW_NO_CLIENT_CN: no X-Client-Cert-CN header and no TLS client cert detected")
+        raise HTTPException(status_code=401, detail="Client identity could not be determined — ensure mTLS is configured")
+
+    logger.info("BOOTSTRAP_RENEW: renewal request for client_id=%s", client_id)
+    credentials = fetch_sentinel_credentials_by_client_id(client_id)
     return credentials

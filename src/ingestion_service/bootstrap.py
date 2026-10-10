@@ -271,3 +271,50 @@ def fetch_sentinel_credentials(join_token: str, client_id: str = "") -> dict:
         "client_cert": client_cert,
         "client_key": client_key,
     }
+
+
+def fetch_sentinel_credentials_by_client_id(client_id: str) -> dict:
+    """
+    Fetch the mTLS credential package from Vault KV using the client_id directly.
+    Used by the /bootstrap/renew_credentials endpoint where the client identity
+    is already asserted via mTLS — no join token is involved.
+
+    Returns {"ca_cert": "...", "client_cert": "...", "client_key": "..."}
+    """
+    from fastapi import HTTPException
+
+    vault_client = get_vault_client()
+    kv_path = f"canary/sentinels/{client_id}"
+
+    try:
+        secret = vault_client.secrets.kv.v2.read_secret_version(
+            path=kv_path, mount_point="secret"
+        )
+        data: dict = secret["data"]["data"]
+    except hvac.exceptions.InvalidPath:
+        logger.warning("RENEW_KV_NOT_FOUND: path=secret/data/%s", kv_path)
+        raise HTTPException(
+            status_code=404,
+            detail=f"Sentinel credentials not found at secret/{kv_path}",
+        )
+    except Exception as exc:
+        logger.error("RENEW_KV_ERROR: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to read credentials from Vault")
+
+    ca_cert = data.get("ca_cert", "")
+    client_cert = data.get("client_cert", "")
+    client_key = data.get("client_key", "")
+
+    if not ca_cert or not client_cert or not client_key:
+        logger.error("RENEW_INCOMPLETE_CREDS: path=secret/data/%s", kv_path)
+        raise HTTPException(status_code=500, detail="Incomplete credential package in Vault")
+
+    logger.info(
+        "RENEW_CREDS_ISSUED: client_id=%s path=secret/data/%s",
+        client_id, kv_path,
+    )
+    return {
+        "ca_cert": ca_cert,
+        "client_cert": client_cert,
+        "client_key": client_key,
+    }

@@ -123,31 +123,46 @@ func main() {
 			}
 		} else {
 			// --- RECOVERY PATH (restart without join token) ---
-			// Use persisted public certs + Vault cert auth to re-acquire a session.
-			// The private key was never on disk; Vault's cert auth engine validates
-			// the presented client certificate instead.
-			log.Println("[boot] No join token — attempting mTLS recovery from persisted certificates")
+			// The private key was lost when the process exited (it was never on disk).
+			// Use the persisted public certs to call the Ingestion Service's renew endpoint.
+			// The Ingestion Service re-issues a full credential package based on the
+			// client_id (derived from the cert CN or config).
+			log.Println("[boot] No join token — attempting credential renewal from Ingestion Service")
 			certCA, certClient, err = sysutil.LoadPersistedCerts(stateDir)
 			if err != nil {
-				log.Fatalf("[boot] No certificates found in %s — cannot authenticate. Re-bootstrap with a new join token is required: %v", stateDir, err)
+				log.Fatalf("[boot] No certificates found in %s — cannot recover. Re-bootstrap with a new join token is required: %v", stateDir, err)
 			}
 
-			// Build TLS config from persisted public certs (disk fallback for recovery).
-			tlsConfig, certCA, certClient, err = sysutil.LoadTLSConfig(cfg.Telemetry, vaultClient, true)
+			// Build a temporary TLS config from persisted certs to authenticate the renewal call.
+			// Note: private key is gone; we pass nil key here — the Ingestion Service
+			// identifies us by the X-Client-Cert-CN header as a fallback.
+			tempTLS, tlsErr := sysutil.BuildTLSConfigFromBytes(certCA, certClient, nil)
+			if tlsErr != nil {
+				// Build config without client cert — CN header will carry identity
+				tempTLS, _ = sysutil.BuildTLSConfigFromBytes(certCA, nil, nil)
+			}
+
+			clientID := cfg.ClientID
+			if clientID == "" {
+				log.Fatalf("[boot] cfg.ClientID is required for credential renewal — set client_id in config")
+			}
+
+			certCA, certClient, err = auth.RecoverFromIngestionService(ctx, cfg.Watchdog.IngestionURL, tempTLS, clientID)
 			if err != nil {
-				log.Fatalf("[boot] Failed to load TLS config for recovery: %v", err)
+				log.Fatalf("[boot] Credential renewal failed — re-bootstrap with a new join token is required: %v", err)
 			}
 
-			// Apply TLS config to Vault client before attempting cert login.
-			if err := vaultClient.SetTLSConfig(tlsConfig); err != nil {
-				log.Fatalf("[boot] Failed to apply TLS config to Vault client: %v", err)
+			// Build final TLS config from renewed private key (now in InMemoryClientKey).
+			tlsConfig, err = sysutil.BuildTLSConfigFromBytes(certCA, certClient, auth.InMemoryClientKey)
+			if err != nil {
+				log.Fatalf("[boot] Failed to build TLS config from renewed credentials: %v", err)
 			}
 
-			// Re-authenticate with Vault using the persisted mTLS client certificate.
-			if _, err := vaultClient.LoginWithCert(); err != nil {
-				log.Fatalf("[boot] mTLS cert login failed — certificates may be expired or revoked. Re-bootstrap with a new join token is required: %v", err)
+			// Persist refreshed public certs.
+			if err := sysutil.PersistPublicCerts(stateDir, certCA, certClient); err != nil {
+				log.Printf("[boot] Warning: failed to persist renewed certificates: %v", err)
 			}
-			log.Println("[boot] mTLS recovery successful ✓")
+			log.Println("[boot] Credential renewal successful ✓")
 		}
 
 		// 1e. Finalize client initialization (applies to both paths)

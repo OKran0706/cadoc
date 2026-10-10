@@ -1,0 +1,13 @@
+client_id: "test-client"
+telemetry:
+  vault_ca_cert: "secret/canary/sentinels/test-client:ca_cert"
+  vault_client_cert: "secret/canary/sentinels/test-client:client_cert"
+  vault_client_key: "secret/canary/sentinels/test-client:client_key"
+
+watchdog:
+  ingestion_url: "http://127.0.0.1:8000"
+
+signing:
+  key_source: vault
+  vault_path: secret/canary/signer
+  vault_field: private_key

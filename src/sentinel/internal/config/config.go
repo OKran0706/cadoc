@@ -13,6 +13,7 @@ import (
 
 // Config is the top-level sentinel configuration.
 type Config struct {
+	ClientID       string               `yaml:"client_id"`       // Identity used for credential renewal
 	Signing        SigningConfig        `yaml:"signing"`
 	Telemetry      TelemetryConfig      `yaml:"telemetry"`
 	OOBAlert       OOBAlertConfig       `yaml:"oob_alert"`

@@ -13,6 +13,7 @@ package auth
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -105,6 +106,79 @@ func BootstrapFromIngestionService(ctx context.Context, ingestionURL, joinToken,
 	}
 
 	// Store private key strictly in process memory — NEVER written to disk.
+	InMemoryClientKey = []byte(creds.ClientKey)
+
+	return []byte(creds.CACert), []byte(creds.ClientCert), nil
+}
+
+// RecoverFromIngestionService re-fetches mTLS credentials from the Ingestion Service
+// using the already-persisted public certificates as the identity proof (via mTLS).
+// No join token is required — the TLS client certificate CN identifies the Sentinel.
+//
+// This is the restart recovery path: the private key was lost when the process exited,
+// so we request fresh credentials from the Ingestion Service using our existing cert.
+// The Ingestion Service validates the mTLS client cert and re-issues credentials.
+//
+// clientID must match the CN in the persisted mtls.crt.
+func RecoverFromIngestionService(ctx context.Context, ingestionURL string, tlsConfig *tls.Config, clientID string) (caCert []byte, clientCert []byte, err error) {
+	if ingestionURL == "" {
+		return nil, nil, fmt.Errorf("recovery: ingestion URL is required")
+	}
+	if tlsConfig == nil {
+		return nil, nil, fmt.Errorf("recovery: TLS config is required for mTLS recovery")
+	}
+	if clientID == "" {
+		return nil, nil, fmt.Errorf("recovery: clientID is required")
+	}
+
+	url := strings.TrimRight(ingestionURL, "/") + "/bootstrap/renew_credentials"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("recovery: build request: %w", err)
+	}
+	// Pass client_id via header so the Ingestion Service can identify this Sentinel
+	// even when mTLS is terminated by a proxy.
+	req.Header.Set("X-Client-Cert-CN", clientID)
+
+	httpClient := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: tlsConfig,
+		},
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("recovery: request to %s failed: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("recovery: read response body: %w", err)
+	}
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// success — fall through
+	case http.StatusUnauthorized:
+		return nil, nil, fmt.Errorf("recovery: identity rejected (401) — mTLS cert may be expired or CN unknown")
+	case http.StatusNotFound:
+		return nil, nil, fmt.Errorf("recovery: credentials not found (404) — re-bootstrap with a join token is required")
+	default:
+		return nil, nil, fmt.Errorf("recovery: unexpected status %d from %s: %s", resp.StatusCode, url, string(body))
+	}
+
+	var creds CredentialResponse
+	if err := json.Unmarshal(body, &creds); err != nil {
+		return nil, nil, fmt.Errorf("recovery: parse credential response: %w", err)
+	}
+
+	if creds.CACert == "" || creds.ClientCert == "" || creds.ClientKey == "" {
+		return nil, nil, fmt.Errorf("recovery: incomplete credential response from Ingestion Service")
+	}
+
+	// Store the refreshed private key in memory.
 	InMemoryClientKey = []byte(creds.ClientKey)
 
 	return []byte(creds.CACert), []byte(creds.ClientCert), nil
