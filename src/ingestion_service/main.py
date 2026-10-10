@@ -43,20 +43,23 @@ state = IngestionState()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Initialize Kafka Producer with retries
-    logger.info(f"STARTUP: Connecting to Kafka at {KAFKA_BOOTSTRAP_SERVERS}")
-    state.producer = AIOKafkaProducer(bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS)
-    
-    for i in range(10):
-        try:
-            await state.producer.start()
-            logger.info("KAFKA_CONNECTED: Successfully bootstrapped")
-            break # Success
-        except Exception as e:
-            logger.warning(f"KAFKA_CONNECTION_RETRY ({i+1}/10): {e}")
-            await asyncio.sleep(5)
+    if os.getenv("SKIP_KAFKA", "false").lower() != "true":
+        logger.info(f"STARTUP: Connecting to Kafka at {KAFKA_BOOTSTRAP_SERVERS}")
+        state.producer = AIOKafkaProducer(bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS)
+        
+        for i in range(10):
+            try:
+                await state.producer.start()
+                logger.info("KAFKA_CONNECTED: Successfully bootstrapped")
+                break # Success
+            except Exception as e:
+                logger.warning(f"KAFKA_CONNECTION_RETRY ({i+1}/10): {e}")
+                await asyncio.sleep(5)
+        else:
+            logger.error("KAFKA_BOOTSTRAP_FAILED: Max retries exceeded")
+            raise RuntimeError("Could not connect to Kafka after multiple retries")
     else:
-        logger.error("KAFKA_BOOTSTRAP_FAILED: Max retries exceeded")
-        raise RuntimeError("Could not connect to Kafka after multiple retries")
+        logger.info("STARTUP: Skipping Kafka initialization (SKIP_KAFKA=true)")
     yield
     # Shutdown: Cleanup
     logger.info("SHUTDOWN: Closing connections")

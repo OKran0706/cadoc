@@ -43,7 +43,7 @@ func IsProvisioned() bool {
 	if stateDir == "" {
 		stateDir = "/var/lib/canary"
 	}
-	certPath := filepath.Join(stateDir, "client.crt")
+	certPath := filepath.Join(stateDir, "mtls.crt")
 	_, err := os.Stat(certPath)
 	return err == nil
 }
