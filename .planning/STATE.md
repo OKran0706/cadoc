@@ -1,9 +1,9 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.4
-milestone_name: Sentinel Hardening & Refactoring
-status: defining_requirements
-last_updated: "2026-04-23T03:40:00Z"
+milestone: v1.6
+milestone_name: Trusted Identity & Orchestration
+status: planning
+last_updated: "2026-05-16T19:15:00Z"
 last_activity: 2026-04-23
 progress:
   total_phases: 1
@@ -14,10 +14,10 @@ progress:
 
 ## Current Position
 
-Phase: 18 (Production Readiness Verification)
+Phase: 22 (Secure Identity Bootstrapping)
 Plan: 1/1 completed
 Status: Complete
-Last activity: 2026-04-26
+Last activity: 2026-05-16
 
 ## Accumulated Context
 
@@ -26,6 +26,8 @@ Last activity: 2026-04-26
 - Pivot to Auditd completed, removing eBPF dependencies.
 - v1.4 focus: Structural hardening, error handling, and lifecycle management.
 - Phase 18 added: Test if sentinel is ready for production.
+- Phase 22 completed: Secure Identity Bootstrapping (mTLS + JWT Join Tokens).
+- Phase 25 added: Vault-less Sentinel Architecture (Brokered Secrets).
 
 
 ## Deferred Items

@@ -21,6 +21,8 @@
 
 - [ ] **Phase 23: Dynamic PKI Integration**
 - [ ] **Phase 24: Operational Resilience (Lease Management)**
+- [ ] **Phase 25: Vault-less Sentinel Architecture (Brokered Secrets)**
+  - Goal: Remove direct Sentinel-to-Vault communication; proxy all secrets via Ingestion Service.
 
 </details>
 - ✅ **v1.3 Auditd Transition** — Phases 11-13 (shipped 2026-04-22)
@@ -113,7 +115,8 @@
 
 | Phase                    | Milestone | Plans | Status   | Completed  |
 | ------------------------ | --------- | ----- | -------- | ---------- |
-| 22. Identity Bootstrap   | v1.6      | 0/1   | Pending  | -          |
+| 25. Vault-less Arch      | v1.6      | 0/1   | Pending  | -          |
+| 22. Identity Bootstrap   | v1.6      | 1/1   | Complete | 2026-05-16 |
 | 21. Hardening & Defence  | v1.5      | 2/2   | Complete | 2026-05-08 |
 | 20. Operational Reliab.  | v1.5      | 4/4   | Complete | 2026-05-08 |
 | 19. Critical Safety      | v1.5      | 2/2   | Complete | 2026-05-08 |
