@@ -16,6 +16,7 @@ from bootstrap import (
     check_rbac,
     mint_join_token,
     fetch_sentinel_credentials,
+    decode_join_token,
 )
 
 # Configuration
@@ -26,6 +27,8 @@ ORG_PUBLIC_KEY = os.getenv("ORG_PUBLIC_KEY", "")  # Placeholder if not set
 VAULT_ADDR = os.getenv("VAULT_ADDR", "http://127.0.0.1:8200")
 VAULT_ADMIN_TOKEN = os.getenv("VAULT_ADMIN_TOKEN", "")
 JWT_SECRET = os.getenv("JWT_SECRET", "")
+# Separate secret for signing Bootstrap Join Tokens (key separation from user JWTs)
+BOOTSTRAP_JWT_SECRET = os.getenv("BOOTSTRAP_JWT_SECRET", "")
 
 # Initialization
 logging.basicConfig(level=logging.INFO)
