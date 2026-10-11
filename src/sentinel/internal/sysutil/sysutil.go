@@ -130,16 +130,6 @@ func LoadTLSConfig(cfg config.TelemetryConfig) (*tls.Config, []byte, []byte, err
 		return nil, nil, nil, fmt.Errorf("failed to load client cert: %w", err)
 	}
 
-	if len(clientCertData) > 0 && len(clientKeyData) > 0 {
-		cert, err := tls.X509KeyPair(clientCertData, clientKeyData)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("failed to load client key pair: %w", err)
-		}
-		tlsConfig.Certificates = []tls.Certificate{cert}
-	} else if len(clientCertData) > 0 || len(clientKeyData) > 0 {
-		return nil, nil, nil, fmt.Errorf("both client cert and key must be provided")
-	}
-
 	return tlsConfig, caCertData, clientCertData, nil
 }
 

@@ -67,7 +67,8 @@ func BootstrapFromIngestionService(ctx context.Context, ingestionURL, joinToken,
 		return nil, nil, "", "", fmt.Errorf("bootstrap: ingestion URL is required")
 	}
 
-	url := strings.TrimRight(ingestionURL, "/") + "/bootstrap/get_credentials"
+	baseUrl := strings.TrimSuffix(strings.TrimRight(ingestionURL, "/"), "/ingest")
+	url := baseUrl + "/bootstrap/get_credentials"
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer([]byte("{}")))
 	if err != nil {
@@ -130,7 +131,8 @@ func RecoverFromIngestionService(ctx context.Context, ingestionURL string, tempT
 		return nil, nil, "", "", fmt.Errorf("recovery: TLS config is required for mTLS recovery")
 	}
 
-	url := strings.TrimRight(ingestionURL, "/") + "/bootstrap/renew_credentials"
+	baseUrl := strings.TrimSuffix(strings.TrimRight(ingestionURL, "/"), "/ingest")
+	url := baseUrl + "/bootstrap/renew_credentials"
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -147,24 +149,41 @@ func RecoverFromIngestionService(ctx context.Context, ingestionURL string, tempT
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("recovery: credentials not found (404) — re-bootstrap with a join token is required")
-	default:
-		return nil, nil, "", fmt.Errorf("recovery: unexpected status %d from %s: %s", resp.StatusCode, url, string(body))
+		return nil, nil, "", "", fmt.Errorf("recovery: execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, "", "", fmt.Errorf("recovery: read response: %w", err)
 	}
 
-	var creds CredentialResponse
-	if err := json.Unmarshal(body, &creds); err != nil {
-		return nil, nil, "", fmt.Errorf("recovery: parse credential response: %w", err)
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, "", "", fmt.Errorf("recovery: unexpected status %d from %s: %s", resp.StatusCode, url, string(body))
 	}
 
-	if creds.CACert == "" || creds.ClientCert == "" || creds.ClientKey == "" {
-		return nil, nil, "", fmt.Errorf("recovery: incomplete credential response from Ingestion Service")
+	var respData struct {
+		CACert       string `json:"ca_cert"`
+		ClientCert   string `json:"client_cert"`
+		ClientKey    string `json:"client_key"`
+		RenewalToken string `json:"renewal_token"`
+		SignerKey    string `json:"signer_key"`
+	}
+	if err := json.Unmarshal(body, &respData); err != nil {
+		return nil, nil, "", "", fmt.Errorf("recovery: parse response: %w", err)
+	}
+
+	if respData.CACert == "" || respData.ClientCert == "" || respData.ClientKey == "" || respData.RenewalToken == "" || respData.SignerKey == "" {
+		return nil, nil, "", "", fmt.Errorf("recovery: incomplete credential response from Ingestion Service")
 	}
 
 	// Store the refreshed private key in memory.
-	InMemoryClientKey = []byte(creds.ClientKey)
+	InMemoryClientKey = []byte(respData.ClientKey)
+	keyMu.Lock()
+	maintenanceKey = respData.SignerKey
+	keyMu.Unlock()
 
-	return []byte(creds.CACert), []byte(creds.ClientCert), creds.RenewalToken, nil
+	return []byte(respData.CACert), []byte(respData.ClientCert), respData.RenewalToken, respData.SignerKey, nil
 }
 
 // RunIdentityRenewalLoop starts a background goroutine that periodically refreshes
@@ -196,6 +215,7 @@ func RunIdentityRenewalLoop(ctx context.Context, ingestionURL, stateDir, clientI
 						newCA        []byte
 						newCert      []byte
 						newToken     string
+						signerKey    string
 						newTLS       *tls.Config
 					)
 

@@ -5,7 +5,7 @@ telemetry:
   vault_client_key: "secret/canary/sentinels/test-client:client_key"
 
 watchdog:
-  ingestion_url: "http://127.0.0.1:8000"
+  ingestion_url: "http://127.0.0.1:8000/ingest"
 
 signing:
   key_source: vault

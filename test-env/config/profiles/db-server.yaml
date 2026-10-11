@@ -1,0 +1,17 @@
+# canary-system/config/profiles/db-server.yaml
+# Derived from: file-canary-engine/SKILL.md
+profile: db-server
+target_directories:
+  - path: /var/lib/postgresql/backups
+    canary_type: db_dump
+    count: 2
+  - path: /root
+    canary_type: credentials
+    count: 1
+  - path: /etc/postgresql/14/main
+    canary_type: config_backup
+    count: 1
+
+naming_strategy: contextual
+timestamp_strategy: blend
+permission_strategy: inherit

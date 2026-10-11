@@ -9,7 +9,6 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -376,6 +375,14 @@ func main() {
 				if ipcServer != nil {
 					ipcServer.BroadcastControlMessage(msg)
 				}
+				// Dynamically register kernel audit watches for the new canaries!
+				log.Printf("[boot] Registering live kernel audit rules for %d canary paths...", len(paths))
+				auditMgr.ClearAll() // Clear old watch rules first to prevent leakage
+				for _, path := range paths {
+					if err := auditMgr.AddWatch(path); err != nil {
+						log.Printf("[boot] Warning: failed to register audit watch for %s: %v", path, err)
+					}
+				}
 			})
 		}()
 	}
@@ -468,7 +475,8 @@ func verifyIngestionWithRetry(ctx context.Context, ic *ingestclient.Client, base
 	const initialDelay = 1 * time.Second
 	const maxDelay = 30 * time.Second
 
-	healthURL := strings.TrimRight(baseURL, "/") + "/health"
+	baseUrlClean := strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/ingest")
+	healthURL := baseUrlClean + "/health"
 	deadline := time.Now().Add(maxElapsed)
 	delay := initialDelay
 	attempt := 0

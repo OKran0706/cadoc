@@ -14,8 +14,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/your-org/canary/sentinel/internal/config"
 )
 
 // Signer handles Ed25519 signing and Merkle chaining of events.

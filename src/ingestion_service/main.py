@@ -72,6 +72,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Sentinel Unified Ingestion Service", lifespan=lifespan)
 
+@app.get("/health", status_code=200)
+async def health_check():
+    return {"status": "healthy"}
+
 class IngestEnvelope(BaseModel):
     payload: str     # Raw canonical JSON string from Sentinel
     signature: str   # Hex-encoded Ed25519 signature

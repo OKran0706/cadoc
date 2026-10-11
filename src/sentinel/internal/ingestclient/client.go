@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -87,4 +88,23 @@ func (c *Client) HTTPClient() *http.Client {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.client
+}
+
+// BaseURL returns the base scheme and host of the ingestion service, stripping any trailing path like /ingest.
+func (c *Client) BaseURL() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	
+	u := c.url
+	// Handle http:// or https://
+	offset := 7
+	if strings.HasPrefix(u, "https://") {
+		offset = 8
+	}
+	if offset < len(u) {
+		if idx := strings.Index(u[offset:], "/"); idx != -1 {
+			return u[:offset+idx]
+		}
+	}
+	return u
 }

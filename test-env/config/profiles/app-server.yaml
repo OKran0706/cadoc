@@ -1,0 +1,21 @@
+# canary-system/config/profiles/app-server.yaml
+# Derived from: file-canary-engine/SKILL.md — Profile-Based Generation
+profile: app-server
+target_directories:
+  - path: /home/deploy/.ssh
+    canary_type: ssh_key
+    count: 1
+    blend_with: real
+  - path: /etc/app
+    canary_type: config_backup
+    count: 2
+  - path: /var/backups
+    canary_type: db_dump
+    count: 1
+  - path: /opt/app/config
+    canary_type: env_file
+    count: 1
+
+naming_strategy: contextual
+timestamp_strategy: blend
+permission_strategy: inherit
