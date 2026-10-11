@@ -10,6 +10,7 @@ Asymmetric cost: It must be cheap for an admin to deploy, but extremely expensiv
 
 ## Current State
 
+- **Milestone v1.6 Shipped (2026-05-17)**: Deployed a production-representative multi-node staging environment (2 Vagrant VMs) for E2E validation of the vault-less identity broker and telemetry pipeline.
 - **Milestone v1.5 Shipped (2026-05-08)**: Code quality hardening, concurrency safety, and operational reliability fixes (resolved 19 audit findings).
 - **Milestone v1.4 Shipped (2026-05-08)**: Sentinel-A production hardening, graceful shutdown, and structured error handling.
 - **Milestone v1.3 Shipped (2026-04-22)**: Zero-dependency Auditd-only architecture with live rule injection and resilient IPC.
@@ -54,4 +55,4 @@ Shipped v1.5 after a rigorous production readiness review (Phase 18). The daemon
 | Unified Ingestion | Decouples agents from Kafka complexity and simplifies mTLS trust management | ✅ v1.1 |
 
 ---
-*Last updated: 2026-05-08 after v1.5 milestone*
+*Last updated: 2026-05-17 after v1.6 milestone (Phase 26)*
