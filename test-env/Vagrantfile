@@ -1,21 +1,45 @@
 Vagrant.configure("2") do |config|
   config.vm.box = "ubuntu/jammy64"
-  config.vm.hostname = "sentinel-vm"
-  
-  # Private network for host-VM communication
-  config.vm.network "private_network", ip: "192.168.56.10"
 
-  config.vm.provider "virtualbox" do |vb|
-    vb.memory = "1024"
-    vb.cpus = 2
+  # ─── VM 1: Ingestion Server (Telemetry Control Plane) ──────────────────────
+  config.vm.define "server" do |server|
+    server.vm.hostname = "canary-server"
+
+    # Private network for inter-VM communication
+    server.vm.network "private_network", ip: "192.168.56.11"
+
+    server.vm.provider "virtualbox" do |vb|
+      vb.memory = "2048"
+      vb.cpus = 2
+    end
+
+    # Synced folders — share project build artifacts and source
+    server.vm.synced_folder "../bin", "/opt/sentinel/bin"
+    server.vm.synced_folder "../src", "/opt/canary/src"
+    server.vm.synced_folder ".", "/vagrant"
+
+    # Provision with Docker + Docker Compose + central services
+    server.vm.provision "shell", path: "setup-server.sh"
   end
 
-  # Provision the VM with our setup script
-  config.vm.provision "shell", path: "setup-vm.sh"
+  # ─── VM 2: Sentinel Node (Native Agent) ────────────────────────────────────
+  config.vm.define "sentinel" do |sentinel|
+    sentinel.vm.hostname = "canary-sentinel"
 
-  # Sync scripts and templates from project root
-  config.vm.synced_folder "../scripts", "/opt/sentinel/scripts"
-  config.vm.synced_folder "../src/sentinel/templates", "/opt/sentinel/templates"
-  config.vm.synced_folder "../bin", "/opt/sentinel/bin"
-  config.vm.synced_folder "../src", "/opt/canary/src"
+    # Private network — same subnet, communicates with server VM
+    sentinel.vm.network "private_network", ip: "192.168.56.12"
+
+    sentinel.vm.provider "virtualbox" do |vb|
+      vb.memory = "1024"
+      vb.cpus = 1
+    end
+
+    # Synced folders — share compiled sentinel binary and source
+    sentinel.vm.synced_folder "../bin", "/opt/sentinel/bin"
+    sentinel.vm.synced_folder "../src", "/opt/canary/src"
+    sentinel.vm.synced_folder ".", "/vagrant"
+
+    # Provision with auditd + sentinel-a native systemd setup
+    sentinel.vm.provision "shell", path: "setup-sentinel.sh"
+  end
 end
