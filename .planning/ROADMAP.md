@@ -133,3 +133,13 @@
 - [ ] 999.1: Automated Canary Placement (Policy Engine)
 - [ ] 999.2: Multi-Tenant Ingestion Isolation
 - [ ] 999.3: Hardware-backed Key Storage (TPM 2.0 Integration)
+
+### Phase 26: Deploy multi-node staging environment with 2 Vagrant VMs
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 25
+**Plans:** 1/1 plans complete
+
+Plans:
+- [x] TBD (run /gsd-plan-phase 26 to break down) (completed 2026-05-17)
