@@ -6,12 +6,14 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 )
 
 // Client handles telemetry delivery to the central ingestion service.
 type Client struct {
 	url    string
+	mu     sync.RWMutex
 	client *http.Client
 }
 
@@ -34,6 +36,25 @@ func New(url string, tlsConfig *tls.Config) *Client {
 	}
 }
 
+// UpdateTLSConfig hot-swaps the underlying TLS configuration used for mTLS.
+// It creates a new transport and client to ensure new connections use the fresh credentials.
+func (c *Client) UpdateTLSConfig(tlsConfig *tls.Config) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	transport := &http.Transport{
+		TLSClientConfig:     tlsConfig,
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 5,
+		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:  false,
+	}
+	c.client = &http.Client{
+		Transport: transport,
+		Timeout:   10 * time.Second,
+	}
+}
+
 // Post sends a signed telemetry envelope to the ingestion service.
 // On failure, it returns an error; the caller determines the drop/retry policy.
 func (c *Client) Post(ctx context.Context, payload []byte) error {
@@ -43,7 +64,11 @@ func (c *Client) Post(ctx context.Context, payload []byte) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.client.Do(req)
+	c.mu.RLock()
+	client := c.client
+	c.mu.RUnlock()
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("ingestion service unreachable: %w", err)
 	}
@@ -59,5 +84,7 @@ func (c *Client) Post(ctx context.Context, payload []byte) error {
 // HTTPClient exposes the underlying *http.Client for OOB or health-check callers
 // that share this transport rather than creating their own http.Client.
 func (c *Client) HTTPClient() *http.Client {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.client
 }

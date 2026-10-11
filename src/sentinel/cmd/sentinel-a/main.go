@@ -202,6 +202,14 @@ func main() {
 		}
 
 		ic = ingestclient.New(cfg.Watchdog.IngestionURL, tlsConfig)
+
+		// Start background identity renewal loop (The "Rachet")
+		// Rotates mTLS certs and tokens every 6 hours while the process is running.
+		auth.RunIdentityRenewalLoop(ctx, cfg.Watchdog.IngestionURL, stateDir, cfg.ClientID, func(newTLS *tls.Config) {
+			ic.UpdateTLSConfig(newTLS)
+			// Also update vault client so future (rare) direct calls use the new cert
+			_ = vaultClient.SetTLSConfig(newTLS)
+		})
 	}
 
 

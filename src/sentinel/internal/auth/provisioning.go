@@ -17,11 +17,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/your-org/canary/sentinel/internal/sysutil"
 )
 
 // CredentialResponse represents the JSON payload returned by the Ingestion Service
@@ -192,4 +195,104 @@ func RecoverFromIngestionService(ctx context.Context, ingestionURL string, tlsCo
 	InMemoryClientKey = []byte(creds.ClientKey)
 
 	return []byte(creds.CACert), []byte(creds.ClientCert), creds.RenewalToken, nil
+}
+
+// RunIdentityRenewalLoop starts a background goroutine that periodically refreshes
+// the Sentinel's mTLS identity and ratcheting token.
+//
+// interval: how often to renew (e.g. 6 hours).
+// onUpdate: callback invoked with the new tls.Config after a successful renewal.
+func RunIdentityRenewalLoop(ctx context.Context, ingestionURL, stateDir, clientID string, onUpdate func(*tls.Config)) {
+	const (
+		baseInterval = 6 * time.Hour
+		minBackoff   = 1 * time.Minute
+		maxBackoff   = 10 * time.Minute
+	)
+
+	go func() {
+		backoff := minBackoff
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(baseInterval):
+				// Start renewal attempt
+				for {
+					var (
+						err          error
+						caCert       []byte
+						renewalToken string
+						tempTLS      *tls.Config
+						newCA        []byte
+						newCert      []byte
+						newToken     string
+						newTLS       *tls.Config
+					)
+
+					log.Printf("[auth] Scheduled identity renewal started for %s", clientID)
+
+					// 1. Load current state
+					caCert, _, err = sysutil.LoadPersistedCerts(stateDir)
+					if err != nil {
+						log.Printf("[auth] Renewal failed (load certs): %v. Retrying in %v...", err, backoff)
+						goto retry
+					}
+					renewalToken, err = sysutil.LoadRenewalToken(stateDir)
+					if err != nil {
+						log.Printf("[auth] Renewal failed (load token): %v. Retrying in %v...", err, backoff)
+						goto retry
+					}
+
+					// 2. Build temporary TLS config for the call (verify server only)
+					tempTLS, err = sysutil.BuildTLSConfigFromBytes(caCert, nil, nil)
+					if err != nil {
+						log.Printf("[auth] Renewal failed (build temp TLS): %v. Retrying in %v...", err, backoff)
+						goto retry
+					}
+
+					// 3. Call Ingestion Service
+					newCA, newCert, newToken, err = RecoverFromIngestionService(ctx, ingestionURL, tempTLS, clientID, renewalToken)
+					if err != nil {
+						log.Printf("[auth] Renewal failed (service call): %v. Retrying in %v...", err, backoff)
+						goto retry
+					}
+
+					// 4. Persist and apply new identity
+					if err := sysutil.PersistPublicCerts(stateDir, newCA, newCert); err != nil {
+						log.Printf("[auth] Renewal failed (persist certs): %v. Retrying in %v...", err, backoff)
+						goto retry
+					}
+					if err := sysutil.PersistRenewalToken(stateDir, newToken); err != nil {
+						log.Printf("[auth] Renewal failed (persist token): %v. Retrying in %v...", err, backoff)
+						goto retry
+					}
+
+					// Build final TLS config (uses global InMemoryClientKey updated by RecoverFromIngestionService)
+					newTLS, err = sysutil.BuildTLSConfigFromBytes(newCA, newCert, InMemoryClientKey)
+					if err != nil {
+						log.Printf("[auth] Renewal failed (build final TLS): %v. Retrying in %v...", err, backoff)
+						goto retry
+					}
+
+					// SUCCESS: Notify application and reset backoff
+					log.Printf("[auth] Identity successfully rotated. New certificates and token applied.")
+					onUpdate(newTLS)
+					backoff = minBackoff
+					break // Exit retry loop and wait for next scheduled interval
+
+				retry:
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(backoff):
+						backoff *= 2
+						if backoff > maxBackoff {
+							backoff = maxBackoff
+						}
+						continue
+					}
+				}
+			}
+		}
+	}()
 }

@@ -227,10 +227,8 @@ def fetch_sentinel_credentials(join_token: str, client_id: str = "", source_ip: 
     # Step 2: Enforce one-time use — atomically mark JTI as consumed.
     _mark_jti_used(jti, ttl=remaining_ttl)
 
-    # Step 2.1: Generate and store the Ratcheting Renewal Token
+    # Step 2.1: Generate the Ratcheting Renewal Token
     renewal_token = secrets.token_hex(32)
-    r = get_redis_client()
-    r.set(f"sentinel:renewal_token:{resolved_client_id}", renewal_token)
 
     logger.info(
         "BOOTSTRAP_CRED_REQUEST: client_id=%s jti=%s",
@@ -240,6 +238,21 @@ def fetch_sentinel_credentials(join_token: str, client_id: str = "", source_ip: 
     # Step 3: Fetch the mTLS credential package from Vault KV using admin token.
     vault_client = get_vault_client()
     kv_path = f"canary/sentinels/{resolved_client_id}"
+
+    # Store the Renewal Token in Vault alongside the credentials
+    # Initial state: current is the new token, previous is None
+    try:
+        vault_client.secrets.kv.v2.create_or_update_secret(
+            path=f"canary/sentinels/{resolved_client_id}/identity",
+            secret={
+                "current_token": renewal_token,
+                "previous_token": None
+            },
+            mount_point="secret",
+        )
+    except Exception as exc:
+        logger.error("BOOTSTRAP_TOKEN_STORE_ERROR: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to store renewal token in Vault")
 
     try:
         secret = vault_client.secrets.kv.v2.read_secret_version(
@@ -276,14 +289,14 @@ def fetch_sentinel_credentials(join_token: str, client_id: str = "", source_ip: 
     }
 
 
-def fetch_sentinel_credentials_by_client_id(client_id: str) -> dict:
+def fetch_sentinel_credentials_by_client_id(client_id: str, is_retry: bool = False) -> dict:
     """
     Fetch the mTLS credential package from Vault KV using the client_id directly.
     Used by the /bootstrap/renew_credentials endpoint.
 
-    RATCHET: Generates a NEW renewal token for the next cycle.
-
-    Returns {"ca_cert": "...", "client_cert": "...", "client_key": "...", "renewal_token": "..."}
+    RATCHET:
+    - If NOT is_retry: Generates a NEW renewal token and moves current -> previous.
+    - If IS_retry: Returns the existing current token (recovery path).
     """
     from fastapi import HTTPException
 
@@ -313,18 +326,47 @@ def fetch_sentinel_credentials_by_client_id(client_id: str) -> dict:
         logger.error("RENEW_INCOMPLETE_CREDS: path=secret/data/%s", kv_path)
         raise HTTPException(status_code=500, detail="Incomplete credential package in Vault")
 
-    # Step: Generate NEW renewal token (The Ratchet)
-    new_renewal_token = secrets.token_hex(32)
-    r = get_redis_client()
-    r.set(f"sentinel:renewal_token:{client_id}", new_renewal_token)
+    # Step: Handle the Ratchet (Dual-Token logic)
+    token_path = f"canary/sentinels/{client_id}/identity"
+    
+    try:
+        # 1. Read existing token state
+        token_secret = vault_client.secrets.kv.v2.read_secret_version(
+            path=token_path, mount_point="secret"
+        )
+        token_data = token_secret["data"]["data"]
+        current_token = token_data.get("current_token")
+    except Exception as exc:
+        logger.error("RENEW_TOKEN_READ_ERROR: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to read token state for ratchet")
+
+    if is_retry:
+        # RECOVERY: The client sent the previous token. We resend the SAME current token.
+        logger.info("RENEW_RECOVERY: client_id=%s using previous token. Resending current token.", client_id)
+        effective_token = current_token
+    else:
+        # RATCHET: Move current -> previous, generate new current
+        effective_token = secrets.token_hex(32)
+        try:
+            vault_client.secrets.kv.v2.create_or_update_secret(
+                path=token_path,
+                secret={
+                    "current_token": effective_token,
+                    "previous_token": current_token
+                },
+                mount_point="secret",
+            )
+        except Exception as exc:
+            logger.error("RENEW_TOKEN_STORE_ERROR: %s", exc)
+            raise HTTPException(status_code=500, detail="Failed to ratchet renewal token in Vault")
 
     logger.info(
-        "RENEW_CREDS_ISSUED: client_id=%s path=secret/data/%s",
-        client_id, kv_path,
+        "RENEW_CREDS_ISSUED: client_id=%s path=secret/data/%s retry=%s",
+        client_id, kv_path, is_retry
     )
     return {
         "ca_cert": ca_cert,
         "client_cert": client_cert,
         "client_key": client_key,
-        "renewal_token": new_renewal_token,
+        "renewal_token": effective_token,
     }

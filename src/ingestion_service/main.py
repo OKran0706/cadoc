@@ -3,6 +3,7 @@ import os
 import json
 import asyncio
 from contextlib import asynccontextmanager
+import hvac
 
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Header
 from pydantic import BaseModel
@@ -19,6 +20,7 @@ from bootstrap import (
     fetch_sentinel_credentials_by_client_id,
     decode_join_token,
     get_redis_client,
+    get_vault_client,
 )
 
 # Configuration
@@ -200,26 +202,41 @@ async def bootstrap_renew_credentials(
         logger.error("RENEW_MISSING_TOKEN: client_id=%s IP=%s", client_id, source_ip)
         raise HTTPException(status_code=400, detail="Missing X-Renewal-Token header")
 
-    # 2. Ratchet Token Check
-    r = get_redis_client()
-    expected_token = r.get(f"sentinel:renewal_token:{client_id}")
+    # 2. Ratchet Token Check (from Vault)
+    vault_client = get_vault_client()
+    kv_path = f"canary/sentinels/{client_id}/identity"
+    current_expected = None
+    previous_expected = None
 
-    if not expected_token:
-        # Token doesn't exist in Redis — Sentinel needs a full re-bootstrap
-        logger.error("RENEW_NO_TOKEN_IN_REDIS: client_id=%s", client_id)
+    try:
+        secret = vault_client.secrets.kv.v2.read_secret_version(
+            path=kv_path, mount_point="secret"
+        )
+        data = secret["data"]["data"]
+        current_expected = data.get("current_token")
+        previous_expected = data.get("previous_token")
+    except hvac.exceptions.InvalidPath:
+        logger.error("RENEW_NO_TOKEN_IN_VAULT: client_id=%s", client_id)
         raise HTTPException(status_code=403, detail="No active session found. Re-bootstrap required.")
+    except Exception as exc:
+        logger.error("RENEW_VAULT_ERROR: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to read session state")
 
-    if provided_token != expected_token:
-        # SECURITY ALARM: The provided token does not match the active session.
-        # This indicates either a desync or an active replay/theft attempt.
+    is_retry = False
+    if provided_token == current_expected:
+        is_retry = False
+    elif provided_token == previous_expected and previous_expected is not None:
+        is_retry = True
+    else:
+        # SECURITY ALARM: Neither token matches.
         logger.critical(
             "SECURITY_ALARM: Invalid ratcheting token for client_id=%s! "
-            "Expected: %s..., Provided: %s..., SourceIP: %s. "
+            "Provided: %s..., SourceIP: %s. "
             "Possible theft or replay attack detected!",
-            client_id, expected_token[:8], provided_token[:8], source_ip
+            client_id, provided_token[:8], source_ip
         )
         raise HTTPException(status_code=403, detail="Invalid renewal token. Request blocked.")
 
-    logger.info("BOOTSTRAP_RENEW_SUCCESS: client_id=%s from %s", client_id, source_ip)
-    credentials = fetch_sentinel_credentials_by_client_id(client_id)
+    logger.info("BOOTSTRAP_RENEW_SUCCESS: client_id=%s from %s (retry=%s)", client_id, source_ip, is_retry)
+    credentials = fetch_sentinel_credentials_by_client_id(client_id, is_retry=is_retry)
     return credentials
