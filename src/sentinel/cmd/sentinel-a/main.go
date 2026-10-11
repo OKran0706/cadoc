@@ -81,7 +81,11 @@ func main() {
 		if err != nil {
 			log.Fatalf("Signer init failed: %v", err)
 		}
-		ic = ingestclient.New(cfg.Watchdog.IngestionURL, nil)
+		devTLS, _, _, err := sysutil.LoadTLSConfig(cfg.Telemetry)
+		if err != nil {
+			log.Fatalf("[DEV] Failed to load telemetry TLS config: %v", err)
+		}
+		ic = ingestclient.New(cfg.Watchdog.IngestionURL, devTLS)
 	} else {
 		// --- PRODUCTION BOOTSTRAP ---
 		// 1a. Resolve Join Token (CLI flag takes precedence over env var)
@@ -96,11 +100,16 @@ func main() {
 			// credential package. The Ingestion Service brokers all Vault interaction;
 			// the Sentinel never contacts Vault directly during enrollment.
 			log.Printf("[boot] No persisted credentials found. Running initial bootstrap with Join Token.")
+			bootstrapTLS, _, _, err := sysutil.LoadTLSConfig(cfg.Telemetry)
+			if err != nil {
+				log.Fatalf("[boot] Failed to load bootstrap TLS config: %v", err)
+			}
 			caCert, clientCert, renewalToken, sk, err := auth.BootstrapFromIngestionService(
 				ctx,
 				cfg.Watchdog.IngestionURL,
 				*joinToken,
 				stateDir,
+				bootstrapTLS,
 			)
 			if err != nil {
 				log.Fatalf("[boot] Bootstrap failed: %v", err)

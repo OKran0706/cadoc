@@ -27,6 +27,12 @@ vault kv put secret/canary/sentinel-a \
     client_cert=@/certs/client.crt \
     client_key=@/certs/client.key
 
+echo "Seeding VM test client credentials for brokered bootstrap..."
+vault kv put secret/canary/sentinels/test-client \
+    ca_cert=@/certs/ca.crt \
+    client_cert=@/certs/client.crt \
+    client_key=@/certs/client.key
+
 echo "Generating Identity test signing key..."
 vault kv put secret/canary/signer \
     private_key=49514eaf037920150d18e38d7ae9ef278631ed6263ebcf189912be7c87c0fa0a
@@ -34,6 +40,8 @@ vault kv put secret/canary/signer \
 echo "Generating Authority test control key..."
 vault kv put secret/canary/control \
     auth_pubkey=0123456789abcdef0123456789abcdef
+vault kv put secret/canary/maintenance \
+    pubkey=0123456789abcdef0123456789abcdef
 
 # 4. Generate Wrapped Token
 echo "Generating WRAPPED JOIN TOKEN for Sentinel-A..."

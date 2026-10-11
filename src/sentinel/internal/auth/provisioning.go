@@ -59,7 +59,7 @@ func IsProvisioned() bool {
 }
 
 // BootstrapFromIngestionService exchanges a Join Token for mTLS credentials and a Signer Key.
-func BootstrapFromIngestionService(ctx context.Context, ingestionURL, joinToken, stateDir string) (caCert, clientCert []byte, renewalToken, signerKey string, err error) {
+func BootstrapFromIngestionService(ctx context.Context, ingestionURL, joinToken, stateDir string, bootstrapTLS *tls.Config) (caCert, clientCert []byte, renewalToken, signerKey string, err error) {
 	if joinToken == "" {
 		return nil, nil, "", "", fmt.Errorf("bootstrap: join token is required")
 	}
@@ -77,7 +77,12 @@ func BootstrapFromIngestionService(ctx context.Context, ingestionURL, joinToken,
 	req.Header.Set("Authorization", "Bearer "+joinToken)
 	req.Header.Set("Content-Type", "application/json")
 
-	httpClient := &http.Client{Timeout: 30 * time.Second}
+	httpClient := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: bootstrapTLS,
+		},
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, nil, "", "", fmt.Errorf("bootstrap: execute request: %w", err)

@@ -1,0 +1,9 @@
+client_id: "test-client"
+
+watchdog:
+  ingestion_url: "http://192.168.56.1:8000/ingest"
+
+signing:
+  key_source: vault
+  vault_path: secret/canary/signer
+  vault_field: private_key

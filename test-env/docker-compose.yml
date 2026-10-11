@@ -11,7 +11,7 @@ services:
       echo 'Generating CA...' &&
       openssl req -new -x509 -keyout ca.key -out ca.crt -days 365 -nodes -subj '/CN=Canary CA' &&
       echo 'Generating Server (LB) Certs with SANs...' &&
-      openssl req -new -newkey rsa:2048 -nodes -keyout server.key -out server.csr -subj '/CN=canary-ingestion-lb' -addext 'subjectAltName = DNS:canary-ingestion-lb, DNS:localhost, IP:127.0.0.1' &&
+      openssl req -new -newkey rsa:2048 -nodes -keyout server.key -out server.csr -subj '/CN=canary-ingestion-lb' -addext 'subjectAltName = DNS:canary-ingestion-lb, DNS:localhost, IP:127.0.0.1, IP:192.168.56.1' &&
       openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt -days 365 -copy_extensions copyall &&
       echo 'Generating Client (Sentinel) Certs...' &&
       openssl req -new -newkey rsa:2048 -nodes -keyout client.key -out client.csr -subj '/CN=sentinel-client' &&
@@ -123,8 +123,14 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - KAFKA_BOOTSTRAP_SERVERS=canary-kafka:9092
-      - ORG_PUBLIC_KEY=89fe8e1d83bfcf0f50d7a649b1b407d2ed2690bbcd4c20ae8c2b48e66f45afd5
+      - VAULT_ADDR=http://vault:8200
+      - VAULT_ADMIN_TOKEN=root
+      - JWT_SECRET=test-secret
+      - BOOTSTRAP_JWT_SECRET=bootstrap-secret
+      - ORG_PUBLIC_KEY=
     depends_on:
+      vault-init:
+        condition: service_completed_successfully
       redis:
         condition: service_started
       kafka:

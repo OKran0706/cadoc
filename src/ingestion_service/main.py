@@ -2,6 +2,7 @@ import logging
 import os
 import json
 import asyncio
+import re
 from contextlib import asynccontextmanager
 import hvac
 
@@ -43,6 +44,27 @@ class IngestionState:
     producer: AIOKafkaProducer = None
 
 state = IngestionState()
+
+
+def _extract_client_id(request: Request) -> str:
+    """
+    Resolve Sentinel identity from trusted proxy headers.
+    """
+    direct_cn = request.headers.get("X-Client-Cert-CN", "").strip()
+    if direct_cn:
+        return direct_cn
+
+    subject_dn = (
+        request.headers.get("X-Client-Cert-DN", "").strip()
+        or request.headers.get("X-SSL-Client-S-DN", "").strip()
+    )
+    if not subject_dn:
+        return ""
+
+    match = re.search(r"CN\s*=\s*([^,/]+)", subject_dn)
+    if match:
+        return match.group(1).strip()
+    return ""
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -194,7 +216,7 @@ async def bootstrap_renew_credentials(
     RATCHET: Requires the 'X-Renewal-Token' header matching the current
     valid token in Redis. Upon success, a new token is generated.
     """
-    client_id = request.headers.get("X-Client-Cert-CN", "")
+    client_id = _extract_client_id(request)
     provided_token = request.headers.get("X-Renewal-Token", "")
     source_ip = request.client.host if request.client else "unknown"
 
@@ -252,7 +274,7 @@ async def get_maintenance_key(request: Request):
     Returns the public key used for verifying maintenance tickets.
     Brokered from Vault.
     """
-    client_id = request.headers.get("X-Client-Cert-CN", "unknown")
+    client_id = _extract_client_id(request) or "unknown"
     vault_client = get_vault_client()
     try:
         # Maintenance pubkey is global (not per-client)
@@ -276,7 +298,7 @@ async def get_killswitch(request: Request):
     Returns the current signed killswitch ticket if active.
     Brokered from Vault.
     """
-    client_id = request.headers.get("X-Client-Cert-CN", "unknown")
+    client_id = _extract_client_id(request) or "unknown"
     vault_client = get_vault_client()
     try:
         # Killswitch ticket is global (not per-client)

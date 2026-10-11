@@ -19,7 +19,7 @@ mkdir -p /run/canary
 # Create dev config for testing without Vault
 cat <<EOF > /opt/sentinel/config/sentinel.yaml
 watchdog:
-  ingestion_url: "http://192.168.56.1:8080/events"
+  ingestion_url: "http://192.168.56.1:8000/ingest"
 signing:
   key_source: "local"
 EOF
