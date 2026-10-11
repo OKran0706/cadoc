@@ -54,15 +54,33 @@ func (m *AuditctlManager) RemoveWatch(path string) error {
 // ClearAll removes all rules associated with this manager's key.
 func (m *AuditctlManager) ClearAll() error {
 	// auditctl -D deletes ALL rules on the system. To delete only our rules safely,
-	// we list them and delete each one by exact string match.
-	script := fmt.Sprintf("auditctl -l | grep ' -k %s' | while read -r rule; do auditctl -d $rule; done", m.key)
-	cmd := exec.Command("sh", "-c", script)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		// Ignore errors if no rules found
-		if !strings.Contains(string(out), "No rules") {
-			return fmt.Errorf("auditctl clear failed: %v (output: %s)", err, string(out))
+	// we list them programmatically and delete each one matching our key.
+	cmdList := exec.Command("auditctl", "-l")
+	out, err := cmdList.CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(out), "No rules") {
+			return nil
+		}
+		return fmt.Errorf("auditctl -l failed: %v", err)
+	}
+
+	lines := strings.Split(string(out), "\n")
+	keyMatch := "-k " + m.key
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.Contains(line, keyMatch) {
+			continue
+		}
+		
+		// Safely construct the delete command without shell parsing
+		args := append([]string{"-d"}, strings.Fields(line)...)
+		delCmd := exec.Command("auditctl", args...)
+		if delOut, delErr := delCmd.CombinedOutput(); delErr != nil {
+			log.Printf("[auditmon] Warning: failed to delete rule '%s': %v (output: %s)", line, delErr, string(delOut))
 		}
 	}
+
 	log.Printf("[auditmon] All live rules for key %s cleared", m.key)
 	return nil
 }

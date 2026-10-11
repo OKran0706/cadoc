@@ -269,7 +269,11 @@ func (a *Aggregator) emit(key string) {
 		event.CWD = strings.Trim(buf.cwdFields["cwd"], "\"")
 	}
 
-	a.emitChan <- event
+	select {
+	case a.emitChan <- event:
+	default:
+		log.Printf("[auditmon] Backpressure: emit channel full, dropping completed event %s", key)
+	}
 }
 
 // janitor cleans up abandoned or timed-out fragmented events.
@@ -304,20 +308,15 @@ func (a *Aggregator) checkTimeouts() {
 	}
 }
 
-func (a *Aggregator) emitPartial(key string) {
-	a.mu.Lock()
-
+func (a *Aggregator) emitPartialUnlocked(key string) {
 	buf, ok := a.buffers[key]
 	if !ok {
-		a.mu.Unlock()
 		return
 	}
 	delete(a.buffers, key)
 
 	// C-02: Gate partial events on canaryMap (same requirement as isComplete).
-	// Must check BEFORE releasing the lock to avoid TOCTOU with SetWatchPaths.
 	if len(buf.paths) == 0 {
-		a.mu.Unlock()
 		return
 	}
 
@@ -329,7 +328,6 @@ func (a *Aggregator) emitPartial(key string) {
 			break
 		}
 	}
-	a.mu.Unlock()
 
 	// Nothing to emit if path not in canary map
 	if path == "" {
@@ -352,7 +350,17 @@ func (a *Aggregator) emitPartial(key string) {
 		fmt.Sscanf(fields["syscall"], "%d", &sys)
 		event.Op = identifyOp(sys)
 	}
-	a.emitChan <- event
+	select {
+	case a.emitChan <- event:
+	default:
+		log.Printf("[auditmon] Backpressure: emit channel full, dropping partial event %s", key)
+	}
+}
+
+func (a *Aggregator) emitPartial(key string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.emitPartialUnlocked(key)
 }
 
 
@@ -391,7 +399,7 @@ func (a *Aggregator) evictOldest() {
 	// Simple strategy for now: evict first map entry
 	for k := range a.buffers {
 		log.Printf("[auditmon] Backpressure: evicting event %s", k)
-		a.emitPartial(k)
+		a.emitPartialUnlocked(k)
 		break
 	}
 }
