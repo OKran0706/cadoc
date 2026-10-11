@@ -1,0 +1,137 @@
+services:
+  cert-generator:
+    image: alpine:latest
+    container_name: canary-cert-generator
+    volumes:
+      - ./certs:/certs
+    working_dir: /certs
+    command: >
+      sh -c "
+      apk add --no-cache openssl &&
+      echo 'Generating CA...' &&
+      openssl req -new -x509 -keyout ca.key -out ca.crt -days 365 -nodes -subj '/CN=Canary CA' &&
+      echo 'Generating Server (LB) Certs with SANs...' &&
+      openssl req -new -newkey rsa:2048 -nodes -keyout server.key -out server.csr -subj '/CN=canary-ingestion-lb' -addext 'subjectAltName = DNS:canary-ingestion-lb, DNS:localhost, IP:127.0.0.1, IP:192.168.56.1, IP:192.168.56.11' &&
+      openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt -days 365 -copy_extensions copyall &&
+      echo 'Generating Client (Sentinel) Certs...' &&
+      openssl req -new -newkey rsa:2048 -nodes -keyout client.key -out client.csr -subj '/CN=sentinel-client' &&
+      openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out client.crt -days 365 &&
+      cat server.crt server.key > kafka.keystore.pem &&
+      cp server.crt kafka.crt && cp server.key kafka.key &&
+      cp ca.crt kafka.truststore.pem && chmod -R 777 /certs &&
+      echo 'Certificates successfully generated!'
+      "
+
+  vault:
+    image: hashicorp/vault:latest
+    container_name: canary-vault
+    entrypoint: ["vault", "server", "-dev"]
+    ports:
+      - "8200:8200"
+    environment:
+      - VAULT_DEV_ROOT_TOKEN_ID=root
+      - VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: canary-kafka
+    depends_on:
+      cert-generator:
+        condition: service_completed_successfully
+    ports:
+      - "9092:9092"
+    environment:
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://canary-kafka:9092"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@canary-kafka:9093"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_DIRS: "/tmp/kraft-combined-logs"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 15s
+
+  webhook:
+    build:
+      context: ./webhook
+      dockerfile: Dockerfile
+    container_name: canary-webhook
+    ports:
+      - "8080:8080"
+
+  vault-init:
+    image: hashicorp/vault:latest
+    container_name: canary-vault-init
+    user: root
+    depends_on:
+      cert-generator:
+        condition: service_completed_successfully
+      vault:
+        condition: service_started
+    environment:
+      - VAULT_ADDR=http://vault:8200
+      - VAULT_TOKEN=root
+    volumes:
+      - ./certs:/certs
+      - ./vault-init.sh:/vault-init.sh
+    entrypoint: ["sh", "/vault-init.sh"]
+
+  # NOTE: sentinel-a container removed — in multi-node staging the Sentinel-A
+  # daemon runs natively on VM 2 (canary-sentinel, 192.168.56.12) under systemd,
+  # not as a Docker container. It connects to this stack via mTLS over the
+  # private host-only network (192.168.56.11:8443).
+
+  redis:
+    image: redis:7-alpine
+    container_name: canary-redis
+    ports:
+      - "6379:6379"
+
+  ingestion-service:
+    build:
+      context: ../src/ingestion_service
+      dockerfile: Dockerfile
+    container_name: canary-ingestion-worker
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - KAFKA_BOOTSTRAP_SERVERS=canary-kafka:9092
+      - VAULT_ADDR=http://vault:8200
+      - VAULT_ADMIN_TOKEN=root
+      - JWT_SECRET=test-secret
+      - BOOTSTRAP_JWT_SECRET=bootstrap-secret
+      - ORG_PUBLIC_KEY=
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./certs:/certs:ro
+
+  ingestion-lb:
+    image: nginx:alpine
+    container_name: canary-ingestion-lb
+    depends_on:
+      - ingestion-service
+    volumes:
+      - ../deploy/nginx/ingestion-lb.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    ports:
+      # Exposed on all interfaces — accessible from canary-sentinel (192.168.56.12)
+      - "8443:8443"
+
+volumes:
+  deployer-output:
