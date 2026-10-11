@@ -112,8 +112,8 @@ if [ $SUCCESS -ne 1 ]; then
 fi
 
 # 7. Find planted canary in /var/backups
-CANARY_FILE=$(find /var/backups -type f | head -n 1)
-if [ -z "$CANARY_FILE" ]; then
+CANARY_FILE=$(grep "SET_MAP" /tmp/sentinel.log | grep -o '"/var/backups/[^"]*"' | head -n 1 | tr -d '"')
+if [ -z "$CANARY_FILE" ] || [ ! -f "$CANARY_FILE" ]; then
     echo "❌ No canary file found in /var/backups"
     exit 1
 fi

@@ -20,6 +20,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"path/filepath"
 
 	"github.com/your-org/canary/sentinel/internal/auditmon"
 	"github.com/your-org/canary/sentinel/internal/auth"
@@ -269,7 +270,7 @@ func main() {
 	}
 
 	// 2. Start Self-Monitoring & Health Management
-	auditMgr := auditmon.NewAuditctlManager("canary")
+	auditMgr := auditmon.NewAuditctlManager("sys-integrity")
 	auditMgr.ClearAll() // Flush any stale rules from previous runs
 	if err := selfmon.Start(ctx, os.Getpid(), s, ic, auditMgr); err != nil {
 		log.Printf("Auditd self-monitor not available: %v. Starting /proc fallback...", err)
@@ -378,9 +379,14 @@ func main() {
 				// Dynamically register kernel audit watches for the new canaries!
 				log.Printf("[boot] Registering live kernel audit rules for %d canary paths...", len(paths))
 				auditMgr.ClearAll() // Clear old watch rules first to prevent leakage
+				watchedDirs := make(map[string]bool)
 				for _, path := range paths {
-					if err := auditMgr.AddWatch(path); err != nil {
-						log.Printf("[boot] Warning: failed to register audit watch for %s: %v", path, err)
+					dir := filepath.Dir(path)
+					if !watchedDirs[dir] {
+						if err := auditMgr.AddWatch(dir); err != nil {
+							log.Printf("[boot] Warning: failed to register audit watch for %s: %v", dir, err)
+						}
+						watchedDirs[dir] = true
 					}
 				}
 			})
