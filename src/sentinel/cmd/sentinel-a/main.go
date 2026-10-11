@@ -30,7 +30,6 @@ import (
 	"github.com/your-org/canary/sentinel/internal/selfmon"
 	"github.com/your-org/canary/sentinel/internal/signer"
 	"github.com/your-org/canary/sentinel/internal/sysutil"
-	"github.com/your-org/canary/sentinel/internal/vault"
 )
 
 func main() {
@@ -70,30 +69,24 @@ func main() {
 	// 1. Initialize Ingestion Client and Signer based on Mode
 	var ic *ingestclient.Client
 	var s *signer.Signer
-	var vaultClient *vault.Client
 	var tlsConfig *tls.Config
+	var signerKey string
 
 	ctx := context.Background()
 
 	if *devMode {
-		log.Println("[DEV] Running in development mode - using local signing and mock ingest")
-		s, err = signer.New(cfg.Signing, nil)
+		log.Println("[DEV] Running in development mode - using mock ingest")
+		// In dev mode, we just need A key. We use the local env var.
+		s, err = signer.New(os.Getenv("SENTINEL_LOCAL_KEY"))
 		if err != nil {
 			log.Fatalf("Signer init failed: %v", err)
 		}
-		// Mock ingest client (or local-only)
 		ic = ingestclient.New(cfg.Watchdog.IngestionURL, nil)
 	} else {
 		// --- PRODUCTION BOOTSTRAP ---
 		// 1a. Resolve Join Token (CLI flag takes precedence over env var)
 		if *joinToken == "" {
 			*joinToken = os.Getenv("SENTINEL_JOIN_TOKEN")
-		}
-
-		// 1b. Initialize Vault Client (used for recovery path and killswitch polling)
-		vaultClient, err = vault.New()
-		if err != nil {
-			log.Fatalf("Failed to initialize Vault client: %v", err)
 		}
 
 		var certCA, certClient []byte
@@ -103,7 +96,7 @@ func main() {
 			// credential package. The Ingestion Service brokers all Vault interaction;
 			// the Sentinel never contacts Vault directly during enrollment.
 			log.Printf("[boot] No persisted credentials found. Running initial bootstrap with Join Token.")
-			caCert, clientCert, renewalToken, err := auth.BootstrapFromIngestionService(
+			caCert, clientCert, renewalToken, sk, err := auth.BootstrapFromIngestionService(
 				ctx,
 				cfg.Watchdog.IngestionURL,
 				*joinToken,
@@ -112,6 +105,7 @@ func main() {
 			if err != nil {
 				log.Fatalf("[boot] Bootstrap failed: %v", err)
 			}
+			signerKey = sk
 
 			// Persist the public certs and the renewal token to disk.
 			// Private key remains ONLY in process memory.
@@ -156,8 +150,8 @@ func main() {
 				log.Fatalf("[boot] cfg.ClientID is required for credential renewal — set client_id in config")
 			}
 
-			// Recover the private key and new certs from Ingestion Service
-			newCACert, newClientCert, newRenewalToken, err := auth.RecoverFromIngestionService(
+			// Recover the private key, new certs, and new Signer Key from Ingestion Service
+			newCACert, newClientCert, newRenewalToken, sk, err := auth.RecoverFromIngestionService(
 				ctx,
 				cfg.Watchdog.IngestionURL,
 				tempTLS,
@@ -167,6 +161,7 @@ func main() {
 			if err != nil {
 				log.Fatalf("[boot] Credential renewal failed — re-bootstrap with a new join token is required: %v", err)
 			}
+			signerKey = sk
 
 			// Persist the refreshed certs and token
 			if err := sysutil.PersistPublicCerts(stateDir, newCACert, newClientCert); err != nil {
@@ -191,12 +186,7 @@ func main() {
 			log.Println("[boot] Credential renewal successful ✓")
 		}
 
-		// 1e. Finalize client initialization (applies to both paths)
-		if err := vaultClient.SetTLSConfig(tlsConfig); err != nil {
-			log.Fatalf("Failed to apply TLS config to Vault client: %v", err)
-		}
-
-		s, err = signer.New(cfg.Signing, vaultClient)
+		s, err = signer.New(signerKey)
 		if err != nil {
 			log.Fatalf("Signer init failed: %v", err)
 		}
@@ -204,11 +194,17 @@ func main() {
 		ic = ingestclient.New(cfg.Watchdog.IngestionURL, tlsConfig)
 
 		// Start background identity renewal loop (The "Rachet")
-		// Rotates mTLS certs and tokens every 6 hours while the process is running.
-		auth.RunIdentityRenewalLoop(ctx, cfg.Watchdog.IngestionURL, stateDir, cfg.ClientID, func(newTLS *tls.Config) {
+		// Rotates mTLS certs, tokens, and signer keys every 6 hours while the process is running.
+		auth.RunIdentityRenewalLoop(ctx, cfg.Watchdog.IngestionURL, stateDir, cfg.ClientID, func(newTLS *tls.Config, newSignerKey string) {
 			ic.UpdateTLSConfig(newTLS)
-			// Also update vault client so future (rare) direct calls use the new cert
-			_ = vaultClient.SetTLSConfig(newTLS)
+			// Hot-swap the signer key
+			newS, err := signer.New(newSignerKey)
+			if err != nil {
+				log.Printf("[auth] Warning: failed to create new signer from rotated key: %v", err)
+			} else {
+				s = newS
+				log.Printf("[auth] Signer key hot-swapped successfully")
+			}
 		})
 	}
 
@@ -227,15 +223,14 @@ func main() {
 		log.Printf("[DEV] Binary integrity warning (ignored in dev): %v", err)
 	}
 
-	// Initialize maintenance ticket verifier (fetch pubkey from Vault — held in memory only)
+	// Initialize maintenance ticket verifier (fetch pubkey from Broker — held in memory only)
 	var ticketVerifier *auth.Verifier
 	if !*devMode {
-		log.Printf("Fetching maintenance pubkey from Vault: %s field=%s",
-			cfg.Watchdog.MaintenanceVaultPath, cfg.Watchdog.MaintenanceVaultField)
+		log.Printf("Fetching maintenance pubkey from Ingestion Broker...")
 
-		pubKeyStr, err := vaultClient.GetSecretField(cfg.Watchdog.MaintenanceVaultPath, cfg.Watchdog.MaintenanceVaultField)
+		pubKeyStr, err := auth.GetMaintenanceKey(ctx, ic)
 		if err != nil {
-			log.Printf("Warning: failed to fetch maintenance pubkey from Vault: %v — ticket auth disabled", err)
+			log.Printf("Warning: failed to fetch maintenance pubkey from Broker: %v — ticket auth disabled", err)
 		} else {
 			tv, err := auth.NewVerifierFromBytes([]byte(pubKeyStr))
 			if err != nil {
@@ -246,7 +241,7 @@ func main() {
 			}
 		}
 	} else {
-		log.Println("[DEV] Skipping maintenance pubkey fetch (Vault disabled in dev)")
+		log.Println("[DEV] Skipping maintenance pubkey fetch (Vault/Broker disabled in dev)")
 	}
 
 	// Fail closed: verify Ingestion LB is reachable before starting (Skip in dev)
@@ -407,11 +402,11 @@ func main() {
 	// 	)
 	// }()
 
-	// 5. Start Kill Switch Poller (requires signed ticket from Vault)
+	// 5. Start Kill Switch Poller (requires signed ticket from Broker)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		pollKillSwitch(ctx, cancel, cfg, s, ic, ticketVerifier, vaultClient, stateDir)
+		pollKillSwitch(ctx, cancel, cfg, s, ic, ticketVerifier, stateDir)
 	}()
 
 	// Main event loop: emit heartbeats and collect events from local sources
@@ -524,7 +519,7 @@ func checkIngestionEndpoint(ctx context.Context, hc *http.Client, url string) er
 	return fmt.Errorf("unexpected status: %s", resp.Status)
 }
 
-func pollKillSwitch(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, s *signer.Signer, ic *ingestclient.Client, verifier *auth.Verifier, vc *vault.Client, stateDir string) {
+func pollKillSwitch(ctx context.Context, cancel context.CancelFunc, cfg *config.Config, s *signer.Signer, ic *ingestclient.Client, verifier *auth.Verifier, stateDir string) {
 	oobUrl := cfg.OOBAlert.URL
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
@@ -534,26 +529,18 @@ func pollKillSwitch(ctx context.Context, cancel context.CancelFunc, cfg *config.
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if vc == nil {
-				// In -dev mode, vault client is nil, skip polling
-				continue
-			}
-			// Fetch signed killswitch ticket from Vault via API
-			ticketStr, err := vc.GetSecretField("secret/canary/control", "killswitch_ticket")
+			// Fetch signed killswitch ticket from Ingestion Service via mTLS
+			ticketStr, err := auth.GetKillSwitch(ctx, ic)
 			if err != nil {
-				if errors.Is(err, vault.ErrForbidden) {
-					log.Println("[killswitch] Vault token expired (403) — attempting refresh...")
-					if err := refreshVaultAccess(cfg, vc, stateDir); err != nil {
-						log.Printf("[killswitch] Vault recovery failed: %v", err)
-					}
-				}
-				continue // No ticket in Vault — normal operation
+				log.Printf("[killswitch] Polling failed: %v", err)
+				continue 
+			}
+
+			if ticketStr == "" {
+				continue // No active killswitch
 			}
 
 			ticketJSON := []byte(strings.TrimSpace(ticketStr))
-			if len(ticketJSON) == 0 {
-				continue
-			}
 
 			// Verify the signed ticket cryptographically
 			if verifier == nil {
@@ -611,32 +598,6 @@ func pollKillSwitch(ctx context.Context, cancel context.CancelFunc, cfg *config.
 			return
 		}
 	}
-}
-
-// refreshVaultAccess performs mTLS re-authentication and refreshes the in-memory TLS config.
-func refreshVaultAccess(cfg *config.Config, vc *vault.Client, stateDir string) error {
-	// Attempt to login using the certificates already on disk (requires mTLS config to be set)
-	_, err := vc.LoginWithCert()
-	if err != nil {
-		return fmt.Errorf("vault login with cert: %w", err)
-	}
-
-	log.Println("Vault re-authenticated successfully ✓ — requesting fresh credentials")
-
-	// Now that we have a valid token, request fresh TLS config into memory
-	// diskFallback=false because we want fresh assets from Vault
-	tlsConfig, _, _, err := sysutil.LoadTLSConfig(cfg.Telemetry, vc, false)
-	if err != nil {
-		return fmt.Errorf("refresh TLS assets: %w", err)
-	}
-
-	if tlsConfig != nil {
-		if err := vc.SetTLSConfig(tlsConfig); err != nil {
-			return fmt.Errorf("apply new TLS config: %w", err)
-		}
-	}
-
-	return nil
 }
 
 // sendOOBAlert fires a JSON alert to the OOB webhook using the shared ingest client transport.

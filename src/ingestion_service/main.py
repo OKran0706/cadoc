@@ -240,3 +240,52 @@ async def bootstrap_renew_credentials(
     logger.info("BOOTSTRAP_RENEW_SUCCESS: client_id=%s from %s (retry=%s)", client_id, source_ip, is_retry)
     credentials = fetch_sentinel_credentials_by_client_id(client_id, is_retry=is_retry)
     return credentials
+
+
+@app.get("/bootstrap/maintenance_key")
+async def get_maintenance_key(request: Request):
+    """
+    Returns the public key used for verifying maintenance tickets.
+    Brokered from Vault.
+    """
+    client_id = request.headers.get("X-Client-Cert-CN", "unknown")
+    vault_client = get_vault_client()
+    try:
+        # Maintenance pubkey is global (not per-client)
+        secret = vault_client.secrets.kv.v2.read_secret_version(
+            path="canary/maintenance", mount_point="secret"
+        )
+        pubkey = secret["data"]["data"].get("cert") or secret["data"]["data"].get("pubkey")
+        if not pubkey:
+            raise ValueError("Maintenance key not found in Vault")
+        
+        logger.info("MAINTENANCE_KEY_FETCH: client_id=%s", client_id)
+        return {"pubkey": pubkey}
+    except Exception as exc:
+        logger.error("MAINTENANCE_KEY_ERROR: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch maintenance key")
+
+
+@app.get("/control/killswitch")
+async def get_killswitch(request: Request):
+    """
+    Returns the current signed killswitch ticket if active.
+    Brokered from Vault.
+    """
+    client_id = request.headers.get("X-Client-Cert-CN", "unknown")
+    vault_client = get_vault_client()
+    try:
+        # Killswitch ticket is global (not per-client)
+        secret = vault_client.secrets.kv.v2.read_secret_version(
+            path="canary/control", mount_point="secret"
+        )
+        ticket = secret["data"]["data"].get("killswitch_ticket")
+        
+        logger.info("KILLSWITCH_TICKET_FETCH: client_id=%s found=%s", client_id, bool(ticket))
+        return {"ticket": ticket}
+    except hvac.exceptions.InvalidPath:
+        # No control path — this is normal if no killswitch was ever issued
+        return {"ticket": None}
+    except Exception as exc:
+        logger.error("KILLSWITCH_FETCH_ERROR: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch killswitch state")

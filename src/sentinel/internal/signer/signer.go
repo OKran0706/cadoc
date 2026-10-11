@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/your-org/canary/sentinel/internal/config"
-	"github.com/your-org/canary/sentinel/internal/vault"
 )
 
 // Signer handles Ed25519 signing and Merkle chaining of events.
@@ -29,51 +28,22 @@ type Signer struct {
 	hostname         string
 }
 
-// New creates a Signer from the signing configuration.
-// Supports key_source: "vault" (mTLS/Token)
-func New(cfg config.SigningConfig, vc *vault.Client) (*Signer, error) {
+// New creates a Signer from a raw hex private key.
+func New(privateKeyHex string) (*Signer, error) {
 	hostname, _ := os.Hostname()
 
-	var privKey ed25519.PrivateKey
-	var pubKeyFP string
-	switch strings.ToLower(cfg.KeySource) {
-	case "vault":
-		if vc == nil {
-			return nil, fmt.Errorf("vault client required for 'vault' key_source")
-		}
+	if privateKeyHex == "" {
+		return nil, fmt.Errorf("private key hex is required for Signer")
+	}
 
-		keyStr, err := vc.GetSecretField(cfg.VaultPath, cfg.VaultField)
-		if err != nil {
-			return nil, fmt.Errorf("vault signing key: %w", err)
-		}
-		
-		keyBytes, err := hex.DecodeString(strings.TrimSpace(keyStr))
-		if err != nil {
-			return nil, fmt.Errorf("decode vault key (hex expected): %w", err)
-		}
-		privKey, pubKeyFP, err = loadKeyBytes(keyBytes)
-		if err != nil {
-			return nil, err
-		}
+	keyBytes, err := hex.DecodeString(strings.TrimSpace(privateKeyHex))
+	if err != nil {
+		return nil, fmt.Errorf("decode signer key (hex expected): %w", err)
+	}
 
-	case "local":
-		// Read deterministic dev key directly from environment variable to ensure zero-disk
-		keyStr := os.Getenv("SENTINEL_LOCAL_KEY")
-		if keyStr == "" {
-			return nil, fmt.Errorf("SENTINEL_LOCAL_KEY environment variable is required for 'local' key_source")
-		}
-		
-		keyBytes, err := hex.DecodeString(strings.TrimSpace(keyStr))
-		if err != nil {
-			return nil, fmt.Errorf("decode local key (hex expected): %w", err)
-		}
-		privKey, pubKeyFP, err = loadKeyBytes(keyBytes)
-		if err != nil {
-			return nil, err
-		}
-
-	default:
-		return nil, fmt.Errorf("unsupported key_source: %s (supported: 'vault', 'local')", cfg.KeySource)
+	privKey, pubKeyFP, err := loadKeyBytes(keyBytes)
+	if err != nil {
+		return nil, err
 	}
 
 	return &Signer{

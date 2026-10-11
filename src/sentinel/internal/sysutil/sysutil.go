@@ -21,28 +21,9 @@ import (
 	"strings"
 
 	"github.com/your-org/canary/sentinel/internal/config"
-	"github.com/your-org/canary/sentinel/internal/vault"
 	"kernel.org/pub/linux/libs/security/libcap/cap"
 )
 
-// UnwrapVaultToken unwraps it to get a real session token, and exports it for the process.
-func UnwrapVaultToken(vc *vault.Client, providedToken, processName string) error {
-	wrapped := providedToken
-	
-	if wrapped == "" {
-		return nil // No wrapped token provided
-	}
-
-	log.Printf("Vault wrapped token detected for %s — attempting to unwrap via API...\n", processName)
-
-	_, err := vc.Unwrap(wrapped)
-	if err != nil {
-		return fmt.Errorf("vault unwrap failed: %w", err)
-	}
-
-	log.Printf("Vault token successfully unwrapped for %s into memory\n", processName)
-	return nil
-}
 
 // DropCapabilitiesAfterInit restricts the process to only CAP_NET_ADMIN.
 func DropCapabilitiesAfterInit() error {
@@ -108,28 +89,18 @@ func VerifySelfIntegrity(binaryName string) (expected string, actual string, err
 	return expectedHash, actualHash, nil
 }
 
-// LoadTLSConfig creates a tls.Config fetching certs from Vault if configured.
-// If diskFallback is true and Vault locations are empty, it will attempt to load
-// certs from the file paths in config (used during restart without join-token).
-// The private key is ALWAYS sourced from Vault — never from disk.
-func LoadTLSConfig(cfg config.TelemetryConfig, vc *vault.Client, diskFallback bool) (*tls.Config, []byte, []byte, error) {
+// LoadTLSConfig creates a tls.Config fetching certs from disk.
+// This is used as a fallback during restart recovery when mTLS identity needs to be proven.
+func LoadTLSConfig(cfg config.TelemetryConfig) (*tls.Config, []byte, []byte, error) {
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 	}
 
 	var caCertData, clientCertData []byte
 
-	// Helper to fetch from Vault or fallback to file
-	getCertData := func(vaultLoc, filePath string) ([]byte, error) {
-		if vaultLoc != "" && vc != nil {
-			path, field := parseVaultLocation(vaultLoc)
-			secretStr, err := vc.GetSecretField(path, field)
-			if err != nil {
-				return nil, fmt.Errorf("vault fetch %s:%s failed: %w", path, field, err)
-			}
-			return []byte(strings.TrimSpace(secretStr)), nil
-		}
-		if filePath != "" && diskFallback {
+	// Helper to load cert from file
+	getCertData := func(filePath string) ([]byte, error) {
+		if filePath != "" {
 			data, err := os.ReadFile(filePath)
 			if err != nil {
 				return nil, fmt.Errorf("read cert file %s: %w", filePath, err)
@@ -141,7 +112,7 @@ func LoadTLSConfig(cfg config.TelemetryConfig, vc *vault.Client, diskFallback bo
 
 	// Load CA Cert
 	var err error
-	caCertData, err = getCertData(cfg.VaultCACert, cfg.CACert)
+	caCertData, err = getCertData(cfg.CACert)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to load CA cert: %w", err)
 	}
@@ -153,15 +124,10 @@ func LoadTLSConfig(cfg config.TelemetryConfig, vc *vault.Client, diskFallback bo
 		tlsConfig.RootCAs = caCertPool
 	}
 
-	// Load Client Cert/Key
-	clientCertData, err = getCertData(cfg.VaultClientCert, cfg.ClientCert)
+	// Load Client Cert (public)
+	clientCertData, err = getCertData(cfg.ClientCert)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to load client cert: %w", err)
-	}
-	// Private key is ALWAYS from Vault — never from disk
-	clientKeyData, err := getCertData(cfg.VaultClientKey, "")
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to load client key: %w", err)
 	}
 
 	if len(clientCertData) > 0 && len(clientKeyData) > 0 {

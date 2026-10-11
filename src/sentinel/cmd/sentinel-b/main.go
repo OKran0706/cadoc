@@ -23,7 +23,6 @@ import (
 	"github.com/your-org/canary/sentinel/internal/ingestclient"
 	"github.com/your-org/canary/sentinel/internal/signer"
 	"github.com/your-org/canary/sentinel/internal/sysutil"
-	"github.com/your-org/canary/sentinel/internal/vault"
 )
 
 func main() {
@@ -33,27 +32,17 @@ func main() {
 	flag.Parse()
 	_ = peerPIDFile // used for mutual monitoring
 
-	// 0. Initialize Vault Client
-	vaultClient, err := vault.New()
-	if err != nil {
-		log.Fatalf("Failed to initialize Vault client: %v", err)
-	}
-
-	if *joinToken != "" {
-		vaultClient.SetToken(*joinToken)
-	}
-
-	// 0. Unwrap Vault Token
-	if err := sysutil.UnwrapVaultToken(vaultClient, *joinToken, "Sentinel-B"); err != nil {
-		log.Printf("Vault unwrapping: %v (skipping if VAULT_TOKEN already set or not needed)", err)
-	}
+	// 0. Brokered identity for Sentinel-B is pending (Phase 26)
+	// For now, we use a placeholder signer to allow compilation.
+	log.Println("[boot] Sentinel-B running in legacy-compat mode (signer key from ENV)")
+	signerKey := os.Getenv("SENTINEL_LOCAL_KEY")
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	tlsConfig, _, _, err := sysutil.LoadTLSConfig(cfg.Telemetry, vaultClient, *joinToken == "")
+	tlsConfig, _, _, err := sysutil.LoadTLSConfig(cfg.Telemetry)
 	if err != nil {
 		log.Fatalf("Failed to load TLS config: %v", err)
 	}
@@ -75,7 +64,7 @@ func main() {
 		log.Fatalf("Integrity verification failed: %v", err)
 	}
 
-	s, err := signer.New(cfg.Signing, vaultClient)
+	s, err := signer.New(signerKey)
 	if err != nil {
 		log.Fatalf("Failed to initialize signer: %v", err)
 	}

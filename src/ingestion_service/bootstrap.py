@@ -14,6 +14,9 @@ import os
 import uuid as _uuid_mod
 import hvac
 import jwt
+import redis
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives import serialization
 import redis as redis_lib
 import secrets
 from fastapi import HTTPException
@@ -33,6 +36,20 @@ JTI_REDIS_PREFIX = "bootstrap:jti:"
 # ---------------------------------------------------------------------------
 # Pydantic request models
 # ---------------------------------------------------------------------------
+
+def generate_signer_key() -> str:
+    """
+    Generates a new Ed25519 private key and returns its hex-encoded raw bytes.
+    """
+    private_key = ed25519.Ed25519PrivateKey.generate()
+    # Get the raw 32-byte seed
+    key_bytes = private_key.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption()
+    )
+    return key_bytes.hex()
+
 
 class BootstrapJoinRequest(BaseModel):
     """Body for POST /bootstrap/join."""
@@ -239,20 +256,24 @@ def fetch_sentinel_credentials(join_token: str, client_id: str = "", source_ip: 
     vault_client = get_vault_client()
     kv_path = f"canary/sentinels/{resolved_client_id}"
 
-    # Store the Renewal Token in Vault alongside the credentials
+    # Generate the initial Signer Key (Brokered)
+    signer_key = generate_signer_key()
+
+    # Store the Renewal Token and Signer Key in Vault alongside the credentials
     # Initial state: current is the new token, previous is None
     try:
         vault_client.secrets.kv.v2.create_or_update_secret(
             path=f"canary/sentinels/{resolved_client_id}/identity",
             secret={
                 "current_token": renewal_token,
-                "previous_token": None
+                "previous_token": None,
+                "signer_key": signer_key
             },
             mount_point="secret",
         )
     except Exception as exc:
         logger.error("BOOTSTRAP_TOKEN_STORE_ERROR: %s", exc)
-        raise HTTPException(status_code=500, detail="Failed to store renewal token in Vault")
+        raise HTTPException(status_code=500, detail="Failed to store renewal assets in Vault")
 
     try:
         secret = vault_client.secrets.kv.v2.read_secret_version(
@@ -286,6 +307,7 @@ def fetch_sentinel_credentials(join_token: str, client_id: str = "", source_ip: 
         "client_cert": client_cert,
         "client_key": client_key,
         "renewal_token": renewal_token,
+        "signer_key": signer_key,
     }
 
 
@@ -336,29 +358,33 @@ def fetch_sentinel_credentials_by_client_id(client_id: str, is_retry: bool = Fal
         )
         token_data = token_secret["data"]["data"]
         current_token = token_data.get("current_token")
+        signer_key = token_data.get("signer_key")
     except Exception as exc:
         logger.error("RENEW_TOKEN_READ_ERROR: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to read token state for ratchet")
 
     if is_retry:
-        # RECOVERY: The client sent the previous token. We resend the SAME current token.
-        logger.info("RENEW_RECOVERY: client_id=%s using previous token. Resending current token.", client_id)
+        # RECOVERY: The client sent the previous token. We resend the SAME current token and signer key.
+        logger.info("RENEW_RECOVERY: client_id=%s using previous token. Resending current assets.", client_id)
         effective_token = current_token
+        effective_signer_key = signer_key
     else:
-        # RATCHET: Move current -> previous, generate new current
+        # RATCHET: Move current -> previous, generate new current and new signer key
         effective_token = secrets.token_hex(32)
+        effective_signer_key = generate_signer_key()
         try:
             vault_client.secrets.kv.v2.create_or_update_secret(
                 path=token_path,
                 secret={
                     "current_token": effective_token,
-                    "previous_token": current_token
+                    "previous_token": current_token,
+                    "signer_key": effective_signer_key
                 },
                 mount_point="secret",
             )
         except Exception as exc:
             logger.error("RENEW_TOKEN_STORE_ERROR: %s", exc)
-            raise HTTPException(status_code=500, detail="Failed to ratchet renewal token in Vault")
+            raise HTTPException(status_code=500, detail="Failed to ratchet renewal assets in Vault")
 
     logger.info(
         "RENEW_CREDS_ISSUED: client_id=%s path=secret/data/%s retry=%s",
@@ -369,4 +395,5 @@ def fetch_sentinel_credentials_by_client_id(client_id: str, is_retry: bool = Fal
         "client_cert": client_cert,
         "client_key": client_key,
         "renewal_token": effective_token,
+        "signer_key": effective_signer_key,
     }

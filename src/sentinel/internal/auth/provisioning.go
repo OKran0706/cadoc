@@ -22,25 +22,29 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/your-org/canary/sentinel/internal/ingestclient"
 	"github.com/your-org/canary/sentinel/internal/sysutil"
 )
-
-// CredentialResponse represents the JSON payload returned by the Ingestion Service
-// containing the Sentinel's mTLS identity and ratcheting renewal token.
-type CredentialResponse struct {
-	CACert       string `json:"ca_cert"`
-	ClientCert   string `json:"client_cert"`
-	ClientKey    string `json:"client_key"`
-	RenewalToken string `json:"renewal_token"` // Used for the next recovery/renewal cycle
-}
 
 // InMemoryClientKey holds the private key bytes fetched during bootstrap.
 // It is NEVER written to disk. It is populated by BootstrapFromIngestionService
 // and consumed by the caller to build the in-memory TLS config.
 // Zeroed out after use to minimise the window of exposure.
-var InMemoryClientKey []byte
+var (
+	InMemoryClientKey []byte
+	maintenanceKey    string
+	keyMu             sync.RWMutex
+)
+
+// GetSignerKey returns the current brokered signer key (Ed25519 hex).
+func GetSignerKey() string {
+	keyMu.RLock()
+	defer keyMu.RUnlock()
+	return maintenanceKey
+}
 
 // IsProvisioned checks if the sentinel has its persisted mTLS public certificates.
 // By default it looks in /var/lib/canary (configurable via STATE_DIRECTORY env var).
@@ -54,27 +58,20 @@ func IsProvisioned() bool {
 	return err == nil
 }
 
-// BootstrapFromIngestionService contacts the Ingestion Service's
-// POST /bootstrap/get_credentials endpoint using the provided joinToken, fetches the
-// mTLS credential package, and stores the private key in InMemoryClientKey (never on disk).
-//
-// Returns the CA cert, client cert PEM bytes, and the Renewal Token so the caller can:
-//  1. Persist the certs via sysutil.PersistPublicCerts (public material only).
-//  2. Persist the Renewal Token for the next restart.
-//  3. Build an in-memory tls.Config via sysutil.BuildTLSConfigFromBytes.
-func BootstrapFromIngestionService(ctx context.Context, ingestionURL, joinToken, stateDir string) (caCert []byte, clientCert []byte, renewalToken string, err error) {
+// BootstrapFromIngestionService exchanges a Join Token for mTLS credentials and a Signer Key.
+func BootstrapFromIngestionService(ctx context.Context, ingestionURL, joinToken, stateDir string) (caCert, clientCert []byte, renewalToken, signerKey string, err error) {
 	if joinToken == "" {
-		return nil, nil, "", fmt.Errorf("bootstrap: join token is required")
+		return nil, nil, "", "", fmt.Errorf("bootstrap: join token is required")
 	}
 	if ingestionURL == "" {
-		return nil, nil, "", fmt.Errorf("bootstrap: ingestion URL is required")
+		return nil, nil, "", "", fmt.Errorf("bootstrap: ingestion URL is required")
 	}
 
 	url := strings.TrimRight(ingestionURL, "/") + "/bootstrap/get_credentials"
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer([]byte("{}")))
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("bootstrap: build request: %w", err)
+		return nil, nil, "", "", fmt.Errorf("bootstrap: build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+joinToken)
 	req.Header.Set("Content-Type", "application/json")
@@ -82,101 +79,74 @@ func BootstrapFromIngestionService(ctx context.Context, ingestionURL, joinToken,
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("bootstrap: execute request: %w", err)
+		return nil, nil, "", "", fmt.Errorf("bootstrap: execute request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("bootstrap: read response: %w", err)
+		return nil, nil, "", "", fmt.Errorf("bootstrap: read response: %w", err)
 	}
 
-	switch resp.StatusCode {
-	case http.StatusOK:
-		// success — fall through
-	case http.StatusForbidden:
-		return nil, nil, "", fmt.Errorf("bootstrap: token already used (403) — %s", string(body))
-	case http.StatusUnauthorized:
-		return nil, nil, "", fmt.Errorf("bootstrap: token invalid or expired (401)")
-	default:
-		return nil, nil, "", fmt.Errorf("bootstrap: unexpected status %d from %s: %s", resp.StatusCode, url, string(body))
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, "", "", fmt.Errorf("bootstrap: unexpected status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var creds CredentialResponse
-	if err := json.Unmarshal(body, &creds); err != nil {
-		return nil, nil, "", fmt.Errorf("bootstrap: parse credential response: %w", err)
+	var respData struct {
+		CACert       string `json:"ca_cert"`
+		ClientCert   string `json:"client_cert"`
+		ClientKey    string `json:"client_key"`
+		RenewalToken string `json:"renewal_token"`
+		SignerKey    string `json:"signer_key"`
+	}
+	if err := json.Unmarshal(body, &respData); err != nil {
+		return nil, nil, "", "", fmt.Errorf("decode bootstrap response: %w", err)
 	}
 
-	if creds.CACert == "" || creds.ClientCert == "" || creds.ClientKey == "" {
-		return nil, nil, "", fmt.Errorf("bootstrap: incomplete credential response — ca_cert, client_cert, and client_key are all required")
+	caCert = []byte(respData.CACert)
+	clientCert = []byte(respData.ClientCert)
+	clientKey := []byte(respData.ClientKey)
+	renewalToken = respData.RenewalToken
+	signerKey = respData.SignerKey
+
+	if len(caCert) == 0 || len(clientCert) == 0 || len(clientKey) == 0 || renewalToken == "" || signerKey == "" {
+		return nil, nil, "", "", fmt.Errorf("incomplete credential package from ingestion service")
 	}
 
-	// Store private key strictly in process memory — NEVER written to disk.
-	InMemoryClientKey = []byte(creds.ClientKey)
+	InMemoryClientKey = clientKey
+	keyMu.Lock()
+	maintenanceKey = signerKey
+	keyMu.Unlock()
 
-	return []byte(creds.CACert), []byte(creds.ClientCert), creds.RenewalToken, nil
+	return caCert, clientCert, renewalToken, signerKey, nil
 }
 
-// RecoverFromIngestionService re-fetches mTLS credentials from the Ingestion Service
-// using the already-persisted public certificates as the identity proof (via mTLS)
-// AND the ratcheting renewal token as proof of sequence.
-// No join token is required.
-//
-// This is the restart recovery path: the private key was lost when the process exited,
-// so we request fresh credentials from the Ingestion Service using our existing cert
-// and our single-use renewal token.
-//
-// clientID must match the CN in the persisted mtls.crt.
-func RecoverFromIngestionService(ctx context.Context, ingestionURL string, tlsConfig *tls.Config, clientID string, renewalToken string) (caCert []byte, clientCert []byte, newRenewalToken string, err error) {
+// RecoverFromIngestionService uses a renewal token to get a fresh mTLS package and Signer Key.
+func RecoverFromIngestionService(ctx context.Context, ingestionURL string, tempTLS *tls.Config, clientID, renewalToken string) (caCert, clientCert []byte, newRenewalToken, signerKey string, err error) {
 	if ingestionURL == "" {
-		return nil, nil, "", fmt.Errorf("recovery: ingestion URL is required")
+		return nil, nil, "", "", fmt.Errorf("recovery: ingestion URL is required")
 	}
-	if tlsConfig == nil {
-		return nil, nil, "", fmt.Errorf("recovery: TLS config is required for mTLS recovery")
-	}
-	if clientID == "" {
-		return nil, nil, "", fmt.Errorf("recovery: clientID is required")
-	}
-	if renewalToken == "" {
-		return nil, nil, "", fmt.Errorf("recovery: renewalToken is required")
+	if tempTLS == nil {
+		return nil, nil, "", "", fmt.Errorf("recovery: TLS config is required for mTLS recovery")
 	}
 
 	url := strings.TrimRight(ingestionURL, "/") + "/bootstrap/renew_credentials"
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("recovery: build request: %w", err)
+		return nil, nil, "", "", fmt.Errorf("recovery: build request: %w", err)
 	}
-	// Pass client_id via header so the Ingestion Service can identify this Sentinel
 	req.Header.Set("X-Client-Cert-CN", clientID)
-	// Pass the Ratcheting Renewal Token to prove we are in sync
 	req.Header.Set("X-Renewal-Token", renewalToken)
 
 	httpClient := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
-			TLSClientConfig: tlsConfig,
+			TLSClientConfig: tempTLS,
 		},
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("recovery: execute request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, nil, "", fmt.Errorf("recovery: read response: %w", err)
-	}
-
-	switch resp.StatusCode {
-	case http.StatusOK:
-		// success — fall through
-	case http.StatusUnauthorized:
-		return nil, nil, "", fmt.Errorf("recovery: identity rejected (401) — mTLS cert may be expired or CN unknown")
-	case http.StatusForbidden:
-		return nil, nil, "", fmt.Errorf("recovery: token rejected (403) — SECURITY ALARM: Your renewal token is invalid or already used. Possible theft detected.")
-	case http.StatusNotFound:
 		return nil, nil, "", fmt.Errorf("recovery: credentials not found (404) — re-bootstrap with a join token is required")
 	default:
 		return nil, nil, "", fmt.Errorf("recovery: unexpected status %d from %s: %s", resp.StatusCode, url, string(body))
@@ -198,11 +168,11 @@ func RecoverFromIngestionService(ctx context.Context, ingestionURL string, tlsCo
 }
 
 // RunIdentityRenewalLoop starts a background goroutine that periodically refreshes
-// the Sentinel's mTLS identity and ratcheting token.
+// the Sentinel's mTLS identity, ratcheting token, and signer key.
 //
 // interval: how often to renew (e.g. 6 hours).
-// onUpdate: callback invoked with the new tls.Config after a successful renewal.
-func RunIdentityRenewalLoop(ctx context.Context, ingestionURL, stateDir, clientID string, onUpdate func(*tls.Config)) {
+// onUpdate: callback invoked with the new tls.Config and new signerKey after a successful renewal.
+func RunIdentityRenewalLoop(ctx context.Context, ingestionURL, stateDir, clientID string, onUpdate func(*tls.Config, string)) {
 	const (
 		baseInterval = 6 * time.Hour
 		minBackoff   = 1 * time.Minute
@@ -251,7 +221,7 @@ func RunIdentityRenewalLoop(ctx context.Context, ingestionURL, stateDir, clientI
 					}
 
 					// 3. Call Ingestion Service
-					newCA, newCert, newToken, err = RecoverFromIngestionService(ctx, ingestionURL, tempTLS, clientID, renewalToken)
+					newCA, newCert, newToken, signerKey, err = RecoverFromIngestionService(ctx, ingestionURL, tempTLS, clientID, renewalToken)
 					if err != nil {
 						log.Printf("[auth] Renewal failed (service call): %v. Retrying in %v...", err, backoff)
 						goto retry
@@ -275,8 +245,8 @@ func RunIdentityRenewalLoop(ctx context.Context, ingestionURL, stateDir, clientI
 					}
 
 					// SUCCESS: Notify application and reset backoff
-					log.Printf("[auth] Identity successfully rotated. New certificates and token applied.")
-					onUpdate(newTLS)
+					log.Printf("[auth] Identity and Signer successfully rotated. New assets applied.")
+					onUpdate(newTLS, signerKey)
 					backoff = minBackoff
 					break // Exit retry loop and wait for next scheduled interval
 
@@ -295,4 +265,46 @@ func RunIdentityRenewalLoop(ctx context.Context, ingestionURL, stateDir, clientI
 			}
 		}
 	}()
+}
+
+// GetMaintenanceKey fetches the public key for maintenance ticket verification via the broker.
+func GetMaintenanceKey(ctx context.Context, ic *ingestclient.Client) (string, error) {
+	resp, err := ic.HTTPClient().Get(ic.BaseURL() + "/bootstrap/maintenance_key")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to fetch maintenance key: status %d", resp.StatusCode)
+	}
+
+	var data struct {
+		PubKey string `json:"pubkey"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return "", err
+	}
+	return data.PubKey, nil
+}
+
+// GetKillSwitch fetches the current killswitch ticket via the broker.
+func GetKillSwitch(ctx context.Context, ic *ingestclient.Client) (string, error) {
+	resp, err := ic.HTTPClient().Get(ic.BaseURL() + "/control/killswitch")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to fetch killswitch: status %d", resp.StatusCode)
+	}
+
+	var data struct {
+		Ticket string `json:"ticket"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return "", err
+	}
+	return data.Ticket, nil
 }
