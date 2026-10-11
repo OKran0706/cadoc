@@ -18,6 +18,7 @@ from bootstrap import (
     fetch_sentinel_credentials,
     fetch_sentinel_credentials_by_client_id,
     decode_join_token,
+    get_redis_client,
 )
 
 # Configuration
@@ -159,6 +160,7 @@ async def bootstrap_join(
 
 @app.post("/bootstrap/get_credentials", status_code=200)
 async def bootstrap_get_credentials(
+    request: Request,
     authorization: str = Header(default=""),
 ):
     """
@@ -170,7 +172,8 @@ async def bootstrap_get_credentials(
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer join token")
     join_token = authorization.removeprefix("Bearer ")
-    credentials = fetch_sentinel_credentials(join_token, client_id="")
+    source_ip = request.client.host if request.client else "unknown"
+    credentials = fetch_sentinel_credentials(join_token, client_id="", source_ip=source_ip)
     logger.info("BOOTSTRAP_GET_CREDENTIALS: credentials issued successfully")
     return credentials
 
@@ -180,24 +183,43 @@ async def bootstrap_renew_credentials(
     request: Request,
 ):
     """
-    mTLS-authenticated renewal endpoint for Sentinels that already have certs.
-    No join token required — identity is asserted by the client certificate CN.
-    Used during Sentinel restarts to re-acquire fresh credentials without human
-    involvement.
-
-    The client_id is extracted from the TLS client cert's Common Name (CN).
-    If TLS is terminated upstream (e.g. by a proxy), the CN should be forwarded
-    via the X-Client-Cert-CN header.
+    mTLS-authenticated renewal endpoint for Sentinels.
+    Identity is asserted by the client certificate CN (client_id).
+    RATCHET: Requires the 'X-Renewal-Token' header matching the current
+    valid token in Redis. Upon success, a new token is generated.
     """
-    # Try to extract CN from TLS client cert or forwarded header.
-    # In production, a TLS-terminating proxy would inject X-Client-Cert-CN.
     client_id = request.headers.get("X-Client-Cert-CN", "")
-    if not client_id:
-        # Direct mTLS: FastAPI exposes the scope if SSL is configured
-        # Fall back gracefully for now — log a warning
-        logger.warning("RENEW_NO_CLIENT_CN: no X-Client-Cert-CN header and no TLS client cert detected")
-        raise HTTPException(status_code=401, detail="Client identity could not be determined — ensure mTLS is configured")
+    provided_token = request.headers.get("X-Renewal-Token", "")
+    source_ip = request.client.host if request.client else "unknown"
 
-    logger.info("BOOTSTRAP_RENEW: renewal request for client_id=%s", client_id)
+    if not client_id:
+        logger.warning("RENEW_NO_CLIENT_CN: IP=%s", source_ip)
+        raise HTTPException(status_code=401, detail="Client identity could not be determined")
+
+    if not provided_token:
+        logger.error("RENEW_MISSING_TOKEN: client_id=%s IP=%s", client_id, source_ip)
+        raise HTTPException(status_code=400, detail="Missing X-Renewal-Token header")
+
+    # 2. Ratchet Token Check
+    r = get_redis_client()
+    expected_token = r.get(f"sentinel:renewal_token:{client_id}")
+
+    if not expected_token:
+        # Token doesn't exist in Redis — Sentinel needs a full re-bootstrap
+        logger.error("RENEW_NO_TOKEN_IN_REDIS: client_id=%s", client_id)
+        raise HTTPException(status_code=403, detail="No active session found. Re-bootstrap required.")
+
+    if provided_token != expected_token:
+        # SECURITY ALARM: The provided token does not match the active session.
+        # This indicates either a desync or an active replay/theft attempt.
+        logger.critical(
+            "SECURITY_ALARM: Invalid ratcheting token for client_id=%s! "
+            "Expected: %s..., Provided: %s..., SourceIP: %s. "
+            "Possible theft or replay attack detected!",
+            client_id, expected_token[:8], provided_token[:8], source_ip
+        )
+        raise HTTPException(status_code=403, detail="Invalid renewal token. Request blocked.")
+
+    logger.info("BOOTSTRAP_RENEW_SUCCESS: client_id=%s from %s", client_id, source_ip)
     credentials = fetch_sentinel_credentials_by_client_id(client_id)
     return credentials

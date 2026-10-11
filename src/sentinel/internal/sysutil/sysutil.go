@@ -230,17 +230,43 @@ func PersistPublicCerts(stateDir string, caCert, clientCert []byte) error {
 
 // LoadPersistedCerts reads the CA and mTLS public certificates from disk.
 // Returns os.ErrNotExist if either file is missing.
-func LoadPersistedCerts(stateDir string) (caCert []byte, clientCert []byte, err error) {
-	caCert, err = os.ReadFile(filepath.Join(stateDir, "ca.crt"))
+func LoadPersistedCerts(stateDir string) (caCert, clientCert []byte, err error) {
+	caPath := filepath.Join(stateDir, "ca.crt")
+	certPath := filepath.Join(stateDir, "mtls.crt")
+
+	caCert, err = os.ReadFile(caPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load ca.crt: %w", err)
 	}
-	clientCert, err = os.ReadFile(filepath.Join(stateDir, "mtls.crt"))
+
+	clientCert, err = os.ReadFile(certPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load mtls.crt: %w", err)
 	}
+
 	log.Printf("Loaded persisted public certs from %s", stateDir)
 	return caCert, clientCert, nil
+}
+
+// PersistRenewalToken writes the Sentinel's current ratcheting renewal token to disk.
+// This file is sensitive as it acts as the "password" for the next restart,
+// so it is written with 0600 permissions.
+func PersistRenewalToken(stateDir, token string) error {
+	tokenPath := filepath.Join(stateDir, "renewal.token")
+	if err := os.WriteFile(tokenPath, []byte(token), 0600); err != nil {
+		return fmt.Errorf("write renewal.token: %w", err)
+	}
+	return nil
+}
+
+// LoadRenewalToken reads the Sentinel's ratcheting renewal token from disk.
+func LoadRenewalToken(stateDir string) (string, error) {
+	tokenPath := filepath.Join(stateDir, "renewal.token")
+	tokenBytes, err := os.ReadFile(tokenPath)
+	if err != nil {
+		return "", fmt.Errorf("load renewal.token: %w", err)
+	}
+	return string(tokenBytes), nil
 }
 
 // IsCommandAvailable checks if a command exists in the system PATH.

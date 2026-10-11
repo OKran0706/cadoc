@@ -97,49 +97,58 @@ func main() {
 		}
 
 		var certCA, certClient []byte
-
 		if *joinToken != "" {
 			// --- FRESH BOOTSTRAP PATH ---
 			// Contact the Ingestion Service to exchange the Join Token for an mTLS
 			// credential package. The Ingestion Service brokers all Vault interaction;
 			// the Sentinel never contacts Vault directly during enrollment.
-			log.Printf("[boot] Join token provided — bootstrapping identity from Ingestion Service: %s", cfg.Watchdog.IngestionURL)
-			certCA, certClient, err = auth.BootstrapFromIngestionService(ctx, cfg.Watchdog.IngestionURL, *joinToken, stateDir)
+			log.Printf("[boot] No persisted credentials found. Running initial bootstrap with Join Token.")
+			caCert, clientCert, renewalToken, err := auth.BootstrapFromIngestionService(
+				ctx,
+				cfg.Watchdog.IngestionURL,
+				*joinToken,
+				stateDir,
+			)
 			if err != nil {
 				log.Fatalf("[boot] Bootstrap failed: %v", err)
 			}
 
-			// Persist public certs for restart recovery.
-			// auth.InMemoryClientKey holds the private key — it is NEVER persisted.
-			if err := sysutil.PersistPublicCerts(stateDir, certCA, certClient); err != nil {
-				log.Fatalf("[boot] Failed to persist certificates to %s: %v — restart recovery will be impossible", stateDir, err)
+			// Persist the public certs and the renewal token to disk.
+			// Private key remains ONLY in process memory.
+			if err := sysutil.PersistPublicCerts(stateDir, caCert, clientCert); err != nil {
+				log.Fatalf("[boot] Failed to persist certificates: %v", err)
 			}
-			log.Printf("[boot] Public certificates persisted to %s (private key in-memory only)", stateDir)
+			if err := sysutil.PersistRenewalToken(stateDir, renewalToken); err != nil {
+				log.Fatalf("[boot] Failed to persist renewal token: %v", err)
+			}
+
+			log.Printf("[boot] Initial bootstrap successful.")
 
 			// Build TLS config from in-memory private key + fetched public certs.
-			tlsConfig, err = sysutil.BuildTLSConfigFromBytes(certCA, certClient, auth.InMemoryClientKey)
+			tlsConfig, err = sysutil.BuildTLSConfigFromBytes(caCert, clientCert, auth.InMemoryClientKey)
 			if err != nil {
 				log.Fatalf("[boot] Failed to build TLS config from bootstrap credentials: %v", err)
 			}
 		} else {
 			// --- RECOVERY PATH (restart without join token) ---
-			// The private key was lost when the process exited (it was never on disk).
-			// Use the persisted public certs to call the Ingestion Service's renew endpoint.
-			// The Ingestion Service re-issues a full credential package based on the
-			// client_id (derived from the cert CN or config).
-			log.Println("[boot] No join token — attempting credential renewal from Ingestion Service")
-			certCA, certClient, err = sysutil.LoadPersistedCerts(stateDir)
+			log.Printf("[boot] No join token — attempting credential renewal from Ingestion Service")
+			caCert, _, err := sysutil.LoadPersistedCerts(stateDir)
 			if err != nil {
-				log.Fatalf("[boot] No certificates found in %s — cannot recover. Re-bootstrap with a new join token is required: %v", stateDir, err)
+				log.Fatalf("[boot] Missing required certs and no join token provided. Cannot start.")
+			}
+			
+			renewalToken, err := sysutil.LoadRenewalToken(stateDir)
+			if err != nil {
+				log.Fatalf("[boot] Missing renewal token. Re-bootstrap with join token required.")
 			}
 
-			// Build a temporary TLS config from persisted certs to authenticate the renewal call.
-			// Note: private key is gone; we pass nil key here — the Ingestion Service
-			// identifies us by the X-Client-Cert-CN header as a fallback.
-			tempTLS, tlsErr := sysutil.BuildTLSConfigFromBytes(certCA, certClient, nil)
-			if tlsErr != nil {
-				// Build config without client cert — CN header will carry identity
-				tempTLS, _ = sysutil.BuildTLSConfigFromBytes(certCA, nil, nil)
+			// Build a temporary TLS config from persisted certs to authenticate the server.
+			// Note: private key is gone; we pass nil for client cert/key.
+			// The Ingestion Service identifies us by the X-Client-Cert-CN header
+			// and authenticates us via the X-Renewal-Token.
+			tempTLS, err := sysutil.BuildTLSConfigFromBytes(caCert, nil, nil)
+			if err != nil {
+				log.Fatalf("[boot] Failed to load CA cert for TLS recovery: %v", err)
 			}
 
 			clientID := cfg.ClientID
@@ -147,13 +156,30 @@ func main() {
 				log.Fatalf("[boot] cfg.ClientID is required for credential renewal — set client_id in config")
 			}
 
-			certCA, certClient, err = auth.RecoverFromIngestionService(ctx, cfg.Watchdog.IngestionURL, tempTLS, clientID)
+			// Recover the private key and new certs from Ingestion Service
+			newCACert, newClientCert, newRenewalToken, err := auth.RecoverFromIngestionService(
+				ctx,
+				cfg.Watchdog.IngestionURL,
+				tempTLS,
+				clientID,
+				renewalToken,
+			)
 			if err != nil {
 				log.Fatalf("[boot] Credential renewal failed — re-bootstrap with a new join token is required: %v", err)
 			}
 
+			// Persist the refreshed certs and token
+			if err := sysutil.PersistPublicCerts(stateDir, newCACert, newClientCert); err != nil {
+				log.Fatalf("[boot] Failed to persist refreshed certificates: %v", err)
+			}
+			if err := sysutil.PersistRenewalToken(stateDir, newRenewalToken); err != nil {
+				log.Fatalf("[boot] Failed to persist refreshed renewal token: %v", err)
+			}
+
+			log.Printf("[boot] Credential renewal successful.")
+
 			// Build final TLS config from renewed private key (now in InMemoryClientKey).
-			tlsConfig, err = sysutil.BuildTLSConfigFromBytes(certCA, certClient, auth.InMemoryClientKey)
+			tlsConfig, err = sysutil.BuildTLSConfigFromBytes(newCACert, newClientCert, auth.InMemoryClientKey)
 			if err != nil {
 				log.Fatalf("[boot] Failed to build TLS config from renewed credentials: %v", err)
 			}

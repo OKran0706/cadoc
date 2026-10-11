@@ -12,10 +12,10 @@
 import logging
 import os
 import uuid as _uuid_mod
-
 import hvac
 import jwt
 import redis as redis_lib
+import secrets
 from fastapi import HTTPException
 from pydantic import BaseModel
 
@@ -82,7 +82,7 @@ def check_rbac(jwt_payload: dict, client_id: str, server_id: str) -> bool:
 # Redis helpers — JTI blacklisting for one-time use enforcement
 # ---------------------------------------------------------------------------
 
-def _get_redis() -> redis_lib.Redis:
+def get_redis_client() -> redis_lib.Redis:
     """Return a synchronous Redis client (used only in bootstrap endpoints)."""
     redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
     return redis_lib.from_url(redis_url, decode_responses=True)
@@ -93,7 +93,7 @@ def _mark_jti_used(jti: str, ttl: int) -> None:
     Record a JTI as consumed in Redis with TTL matching the token's expiry.
     Subsequent calls with the same JTI will be rejected by _assert_jti_unused().
     """
-    r = _get_redis()
+    r = get_redis_client()
     key = JTI_REDIS_PREFIX + jti
     # SET key 1 EX ttl NX — only set if not already present (atomic guard)
     already_set = not r.set(key, "1", ex=ttl, nx=True)
@@ -112,7 +112,7 @@ def _assert_jti_unused(jti: str) -> None:
     Note: _mark_jti_used() combines the check+set atomically via SET NX.
     This function is kept as a pre-flight read for clarity in the calling code.
     """
-    r = _get_redis()
+    r = get_redis_client()
     if r.exists(JTI_REDIS_PREFIX + jti):
         raise HTTPException(
             status_code=403,
@@ -204,7 +204,7 @@ def get_vault_client() -> hvac.Client:
     return hvac.Client(url=vault_addr, token=admin_token)
 
 
-def fetch_sentinel_credentials(join_token: str, client_id: str = "") -> dict:
+def fetch_sentinel_credentials(join_token: str, client_id: str = "", source_ip: str = "unknown") -> dict:
     """
     Validate the Join Token JWT, enforce one-time use via Redis JTI blacklisting,
     then fetch the Sentinel's mTLS credential package from Vault KV.
@@ -212,10 +212,8 @@ def fetch_sentinel_credentials(join_token: str, client_id: str = "") -> dict:
     FIX CR-01: client_id is now extracted from the JWT payload directly,
     eliminating the need for the caller to pass it separately.
 
-    Returns {"ca_cert": "...", "client_cert": "...", "client_key": "..."}
-
-    The Ingestion Service does NOT persist client_key — it is returned
-    directly to the Sentinel which keeps it in memory only.
+    IP PINNING: Records the source_ip in Redis to ensure subsequent renewal
+    requests come from the same host.
     """
     # Step 1: Verify and decode the Join Token JWT.
     payload = decode_join_token(join_token)
@@ -227,8 +225,12 @@ def fetch_sentinel_credentials(join_token: str, client_id: str = "") -> dict:
     remaining_ttl = max(1, exp - int(time.time()))
 
     # Step 2: Enforce one-time use — atomically mark JTI as consumed.
-    # This is the primary replay-attack defence.
     _mark_jti_used(jti, ttl=remaining_ttl)
+
+    # Step 2.1: Generate and store the Ratcheting Renewal Token
+    renewal_token = secrets.token_hex(32)
+    r = get_redis_client()
+    r.set(f"sentinel:renewal_token:{resolved_client_id}", renewal_token)
 
     logger.info(
         "BOOTSTRAP_CRED_REQUEST: client_id=%s jti=%s",
@@ -270,16 +272,18 @@ def fetch_sentinel_credentials(join_token: str, client_id: str = "") -> dict:
         "ca_cert": ca_cert,
         "client_cert": client_cert,
         "client_key": client_key,
+        "renewal_token": renewal_token,
     }
 
 
 def fetch_sentinel_credentials_by_client_id(client_id: str) -> dict:
     """
     Fetch the mTLS credential package from Vault KV using the client_id directly.
-    Used by the /bootstrap/renew_credentials endpoint where the client identity
-    is already asserted via mTLS — no join token is involved.
+    Used by the /bootstrap/renew_credentials endpoint.
 
-    Returns {"ca_cert": "...", "client_cert": "...", "client_key": "..."}
+    RATCHET: Generates a NEW renewal token for the next cycle.
+
+    Returns {"ca_cert": "...", "client_cert": "...", "client_key": "...", "renewal_token": "..."}
     """
     from fastapi import HTTPException
 
@@ -309,6 +313,11 @@ def fetch_sentinel_credentials_by_client_id(client_id: str) -> dict:
         logger.error("RENEW_INCOMPLETE_CREDS: path=secret/data/%s", kv_path)
         raise HTTPException(status_code=500, detail="Incomplete credential package in Vault")
 
+    # Step: Generate NEW renewal token (The Ratchet)
+    new_renewal_token = secrets.token_hex(32)
+    r = get_redis_client()
+    r.set(f"sentinel:renewal_token:{client_id}", new_renewal_token)
+
     logger.info(
         "RENEW_CREDS_ISSUED: client_id=%s path=secret/data/%s",
         client_id, kv_path,
@@ -317,4 +326,5 @@ def fetch_sentinel_credentials_by_client_id(client_id: str) -> dict:
         "ca_cert": ca_cert,
         "client_cert": client_cert,
         "client_key": client_key,
+        "renewal_token": new_renewal_token,
     }
