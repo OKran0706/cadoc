@@ -32,6 +32,10 @@ vault kv put secret/canary/sentinels/test-client \
     ca_cert=@/certs/ca.crt \
     client_cert=@/certs/client.crt \
     client_key=@/certs/client.key
+vault kv put secret/canary/sentinels/sentinel-node-staging \
+    ca_cert=@/certs/ca.crt \
+    client_cert=@/certs/client.crt \
+    client_key=@/certs/client.key
 
 echo "Generating Identity test signing key..."
 vault kv put secret/canary/signer \
