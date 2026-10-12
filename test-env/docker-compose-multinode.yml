@@ -103,6 +103,8 @@ services:
       context: /opt/canary/src/ingestion_service
       dockerfile: Dockerfile
     container_name: canary-ingestion-worker
+    ports:
+      - "8000:8443"
     environment:
       - REDIS_URL=redis://redis:6379/0
       - KAFKA_BOOTSTRAP_SERVERS=canary-kafka:9092
