@@ -79,13 +79,8 @@ fi
 echo ""
 echo "--- Step 3: Obtain Join Token ---"
 
-# Generate admin JWT for authentication inside VM 1's docker container (avoids host dependency)
-USER_TOKEN=$(vagrant ssh server -c "docker exec canary-ingestion-worker python3 -c \"
-import jwt, time
-payload = {'sub': 'admin', 'iat': int(time.time()), 'exp': int(time.time()) + 3600}
-token = jwt.encode(payload, 'test-secret', algorithm='HS256')
-print(token if isinstance(token, str) else token.decode())
-\"" 2>/dev/null | tr -d '\r\n')
+# Generate admin JWT for authentication inside VM 1 (avoids host dependency)
+USER_TOKEN=$(vagrant ssh server -c "python3 /vagrant/gen_token.py" 2>/dev/null | tr -d '\r\n')
 
 if [ -z "$USER_TOKEN" ]; then
     echo "✗ Failed to generate admin JWT via server VM"
