@@ -124,14 +124,14 @@ echo "--- Step 5: Bootstrap Sentinel-A on VM 2 ---"
 
 TOKEN_CONTENT=$(cat certs/sentinel-a.token)
 
-# Run sentinel bootstrap via SSH into VM 2
-echo "  Running: vagrant ssh sentinel -c 'sudo sentinel-a --join-token <TOKEN>'"
-vagrant ssh sentinel -c \
+# Run sentinel bootstrap via SSH into VM 2 with a 15-second timeout to allow the daemon
+# to write credentials and keep running, while allowing our script to continue.
+echo "  Running: vagrant ssh sentinel -c 'sudo sentinel-a --join-token <TOKEN>' with timeout"
+timeout 15 vagrant ssh sentinel -c \
     "sudo /usr/local/bin/sentinel-a \
      --config /opt/sentinel/config/sentinel.yaml \
-     --join-token '${TOKEN_CONTENT}' \
-     2>&1 | tail -20" 2>&1 | tee /tmp/sentinel-bootstrap.log || {
-    echo "⚠ Bootstrap command returned non-zero (may be normal if sentinel is already bootstrapped)"
+     --join-token '${TOKEN_CONTENT}'" 2>&1 | tee /tmp/sentinel-bootstrap.log || {
+    echo "⚠ Bootstrap command exited or timed out (normal as daemon keeps running)"
 }
 
 sleep 5
