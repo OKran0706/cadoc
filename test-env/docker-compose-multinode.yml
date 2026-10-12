@@ -100,7 +100,7 @@ services:
 
   ingestion-service:
     build:
-      context: ../src/ingestion_service
+      context: /opt/canary/src/ingestion_service
       dockerfile: Dockerfile
     container_name: canary-ingestion-worker
     environment:
@@ -127,7 +127,7 @@ services:
     depends_on:
       - ingestion-service
     volumes:
-      - ../deploy/nginx/ingestion-lb.conf:/etc/nginx/nginx.conf:ro
+      - /opt/canary/deploy/nginx/ingestion-lb.conf:/etc/nginx/nginx.conf:ro
       - ./certs:/etc/nginx/certs:ro
     ports:
       # Exposed on all interfaces — accessible from canary-sentinel (192.168.56.12)

@@ -16,6 +16,7 @@ Vagrant.configure("2") do |config|
     # Synced folders — share project build artifacts and source
     server.vm.synced_folder "../bin", "/opt/sentinel/bin"
     server.vm.synced_folder "../src", "/opt/canary/src"
+    server.vm.synced_folder "../deploy", "/opt/canary/deploy"
     server.vm.synced_folder ".", "/vagrant"
 
     # Provision with Docker + Docker Compose + central services
