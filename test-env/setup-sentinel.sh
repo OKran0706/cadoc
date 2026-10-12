@@ -37,19 +37,22 @@ watchdog:
   ingestion_url: "https://192.168.56.11:8443/ingest"
 signing:
   key_source: "brokered"
+telemetry:
+  tls: true
+  ca_cert: "/vagrant/certs/ca.crt"
 EOF
 echo "✓ sentinel.yaml written pointing to https://192.168.56.11:8443/ingest"
 
 # 5. Copy sentinel-a binary from synced folder
 echo "--- Copying sentinel-a binary ---"
-if [ -f /opt/sentinel/bin/sentinel-a ]; then
-    cp /opt/sentinel/bin/sentinel-a /usr/local/bin/sentinel-a
-    chmod +x /usr/local/bin/sentinel-a
-    echo "✓ sentinel-a binary installed to /usr/local/bin/sentinel-a"
-elif [ -f /vagrant/sentinel-a ]; then
+if [ -f /vagrant/sentinel-a ]; then
     cp /vagrant/sentinel-a /usr/local/bin/sentinel-a
     chmod +x /usr/local/bin/sentinel-a
     echo "✓ sentinel-a binary installed from /vagrant/sentinel-a"
+elif [ -f /opt/sentinel/bin/sentinel-a ]; then
+    cp /opt/sentinel/bin/sentinel-a /usr/local/bin/sentinel-a
+    chmod +x /usr/local/bin/sentinel-a
+    echo "✓ sentinel-a binary installed to /usr/local/bin/sentinel-a"
 else
     echo "⚠ sentinel-a binary not found in /opt/sentinel/bin/ or /vagrant/"
     echo "  Build with: (cd src/sentinel && go build -o ../../bin/sentinel-a ./cmd/sentinel-a/)"
