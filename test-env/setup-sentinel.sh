@@ -115,8 +115,8 @@ NoNewPrivileges=yes
 ReadWritePaths=/var/lib/canary /tmp /run/canary
 
 # Capabilities for network admin, resource control, and auditd interaction
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_RESOURCE CAP_AUDIT_CONTROL CAP_AUDIT_WRITE
-AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_RESOURCE CAP_AUDIT_CONTROL CAP_AUDIT_WRITE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_RESOURCE CAP_AUDIT_CONTROL CAP_AUDIT_WRITE CAP_AUDIT_READ
+AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_RESOURCE CAP_AUDIT_CONTROL CAP_AUDIT_WRITE CAP_AUDIT_READ
 
 # Logging
 StandardOutput=journal
