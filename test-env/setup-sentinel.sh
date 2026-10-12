@@ -105,13 +105,14 @@ ExecStart=/usr/local/bin/sentinel-a --config /opt/sentinel/config/sentinel.yaml
 Restart=on-failure
 RestartSec=5s
 User=root
+RuntimeDirectory=canary
 
 # Hardening
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes
-ReadWritePaths=/var/lib/canary /tmp
+ReadWritePaths=/var/lib/canary /tmp /run/canary
 
 # Capabilities for network admin, resource control, and auditd interaction
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_RESOURCE CAP_AUDIT_CONTROL CAP_AUDIT_WRITE
