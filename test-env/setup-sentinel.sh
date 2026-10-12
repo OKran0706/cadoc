@@ -80,7 +80,7 @@ active = yes
 direction = out
 path = /usr/local/bin/sentinel-a
 args = audit-consume
-type = builtin
+type = always
 format = string
 EOF
 echo "✓ audispd plugin registered at ${PLUGIN_DIR}/sentinel.conf"
