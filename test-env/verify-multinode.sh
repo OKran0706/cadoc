@@ -99,14 +99,7 @@ if [ "$JOIN_RESPONSE" = "REQUEST_FAILED" ]; then
     exit 1
 fi
 
-JOIN_TOKEN=$(echo "$JOIN_RESPONSE" | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    print(data.get('join_token', ''))
-except Exception:
-    print('')
-" 2>/dev/null)
+JOIN_TOKEN=$(echo "$JOIN_RESPONSE" | jq -r '.join_token // empty' 2>/dev/null)
 
 if [ -z "$JOIN_TOKEN" ] || [ "$JOIN_TOKEN" = "null" ]; then
     echo "✗ Failed to obtain join token"
