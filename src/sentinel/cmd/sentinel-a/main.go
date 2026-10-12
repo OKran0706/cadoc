@@ -93,7 +93,6 @@ func main() {
 			*joinToken = os.Getenv("SENTINEL_JOIN_TOKEN")
 		}
 
-		var certCA, certClient []byte
 		if *joinToken != "" {
 			// --- FRESH BOOTSTRAP PATH ---
 			// Contact the Ingestion Service to exchange the Join Token for an mTLS
@@ -188,10 +187,7 @@ func main() {
 				log.Fatalf("[boot] Failed to build TLS config from renewed credentials: %v", err)
 			}
 
-			// Persist refreshed public certs.
-			if err := sysutil.PersistPublicCerts(stateDir, certCA, certClient); err != nil {
-				log.Printf("[boot] Warning: failed to persist renewed certificates: %v", err)
-			}
+
 			log.Println("[boot] Credential renewal successful ✓")
 		}
 
