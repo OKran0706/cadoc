@@ -25,11 +25,17 @@ import (
 )
 
 
-// DropCapabilitiesAfterInit restricts the process to only CAP_NET_ADMIN.
+// DropCapabilitiesAfterInit restricts the process to only the minimum required capabilities.
 func DropCapabilitiesAfterInit() error {
 	c := cap.NewSet()
 	c.SetFlag(cap.Permitted, true, cap.NET_ADMIN)
 	c.SetFlag(cap.Effective, true, cap.NET_ADMIN)
+	c.SetFlag(cap.Permitted, true, cap.AUDIT_CONTROL)
+	c.SetFlag(cap.Effective, true, cap.AUDIT_CONTROL)
+	c.SetFlag(cap.Permitted, true, cap.AUDIT_WRITE)
+	c.SetFlag(cap.Effective, true, cap.AUDIT_WRITE)
+	c.SetFlag(cap.Permitted, true, cap.AUDIT_READ)
+	c.SetFlag(cap.Effective, true, cap.AUDIT_READ)
 	// Explicitly clear risky capabilities
 	c.SetFlag(cap.Permitted, false, cap.SYS_ADMIN)
 	c.SetFlag(cap.Effective, false, cap.SYS_ADMIN)
