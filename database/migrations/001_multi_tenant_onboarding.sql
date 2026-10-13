@@ -17,18 +17,56 @@ CREATE TABLE IF NOT EXISTS public.tenants (
 );
 
 CREATE TABLE IF NOT EXISTS public.global_audit_log (
-    id BIGSERIAL PRIMARY KEY,
+    id BIGSERIAL NOT NULL,
     tenant_id UUID REFERENCES public.tenants(id),
     event_type VARCHAR(50) NOT NULL,
     payload JSONB,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (id, created_at)
+) PARTITION BY RANGE (created_at);
 
 CREATE INDEX IF NOT EXISTS global_audit_log_tenant_id_idx
     ON public.global_audit_log (tenant_id);
 
 CREATE INDEX IF NOT EXISTS global_audit_log_created_at_idx
     ON public.global_audit_log (created_at);
+
+CREATE INDEX IF NOT EXISTS global_audit_log_tenant_created_at_idx
+    ON public.global_audit_log (tenant_id, created_at DESC);
+
+CREATE OR REPLACE FUNCTION public.ensure_monthly_range_partition(
+    p_parent_schema TEXT,
+    p_parent_table TEXT,
+    p_for_timestamp TIMESTAMPTZ DEFAULT now()
+) RETURNS TEXT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_month_start DATE := date_trunc('month', p_for_timestamp)::date;
+    v_month_end DATE := (date_trunc('month', p_for_timestamp) + interval '1 month')::date;
+    v_partition_name TEXT := p_parent_table || '_' || to_char(date_trunc('month', p_for_timestamp), 'YYYY_MM');
+BEGIN
+    EXECUTE format(
+        'CREATE TABLE IF NOT EXISTS %I.%I PARTITION OF %I.%I FOR VALUES FROM (%L) TO (%L)',
+        p_parent_schema,
+        v_partition_name,
+        p_parent_schema,
+        p_parent_table,
+        v_month_start,
+        v_month_end
+    );
+
+    RETURN format('%I.%I', p_parent_schema, v_partition_name);
+END;
+$$;
+
+SELECT public.ensure_monthly_range_partition('public', 'global_audit_log', now());
+SELECT public.ensure_monthly_range_partition('public', 'global_audit_log', now() + interval '1 month');
+
+CREATE TABLE IF NOT EXISTS public.global_audit_log_default
+    PARTITION OF public.global_audit_log DEFAULT;
 
 CREATE OR REPLACE FUNCTION public.touch_updated_at()
 RETURNS TRIGGER
@@ -200,7 +238,7 @@ BEGIN
 
     EXECUTE format($ddl$
         CREATE TABLE %I.tamper_alerts (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            id UUID NOT NULL DEFAULT gen_random_uuid(),
             server_id UUID NOT NULL REFERENCES %I.servers(id) ON DELETE CASCADE,
             agent_id UUID REFERENCES %I.sentinel_agents(id) ON DELETE SET NULL,
             event_type VARCHAR(50) NOT NULL,
@@ -209,6 +247,7 @@ BEGIN
             detected_at TIMESTAMPTZ NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (id, detected_at),
             CONSTRAINT tamper_alerts_event_type_chk CHECK (
                 event_type IN (
                     'DECOY_TAMPER',
@@ -220,8 +259,18 @@ BEGIN
             CONSTRAINT tamper_alerts_severity_chk CHECK (
                 severity IN ('low', 'medium', 'high', 'critical')
             )
-        )
+        ) PARTITION BY RANGE (detected_at)
     $ddl$, v_schema_name, v_schema_name, v_schema_name);
+
+    PERFORM public.ensure_monthly_range_partition(v_schema_name, 'tamper_alerts', now());
+    PERFORM public.ensure_monthly_range_partition(v_schema_name, 'tamper_alerts', now() + interval '1 month');
+
+    EXECUTE format(
+        'CREATE TABLE %I.%I PARTITION OF %I.tamper_alerts DEFAULT',
+        v_schema_name,
+        'tamper_alerts_default',
+        v_schema_name
+    );
 
     EXECUTE format(
         'CREATE INDEX %I ON %I.servers (project_id)',
