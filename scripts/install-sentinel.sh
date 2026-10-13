@@ -61,7 +61,7 @@ active = yes
 direction = out
 path = ${INSTALL_DIR}/sentinel
 args = audit-consume
-type = builtin
+type = always
 format = string
 EOF
 
