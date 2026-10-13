@@ -146,10 +146,10 @@ Plans:
 
 ### Phase 27: Multi-Tenant Platform and Dashboard API
 
-**Goal:** [To be planned]
+**Goal:** Implement administrative control plane with dynamic DB schema search path routing, brokered bootstrap JWT validation, Redis keyspace liveness tracking, and cursor paginated alerts.
 **Requirements**: TBD
 **Depends on:** Phase 26
-**Plans:** 0 plans
+**Plans:** 1 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 27 to break down)
+- [ ] 27-01: Multi-Tenant Platform and Dashboard API
