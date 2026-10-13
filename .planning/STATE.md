@@ -31,6 +31,7 @@ Last activity: 2026-05-17
 - Phase 22 completed: Secure Identity Bootstrapping (mTLS + JWT Join Tokens).
 - Phase 25 added: Vault-less Sentinel Architecture (Brokered Secrets).
 - Phase 26 added: Deploy multi-node staging environment with 2 Vagrant VMs.
+- Phase 27 added: Multi-Tenant Platform and Dashboard API
 
 ## Deferred Items
 

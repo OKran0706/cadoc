@@ -143,3 +143,13 @@
 
 Plans:
 - [x] TBD (run /gsd-plan-phase 26 to break down) (completed 2026-05-17)
+
+### Phase 27: Multi-Tenant Platform and Dashboard API
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 26
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 27 to break down)
