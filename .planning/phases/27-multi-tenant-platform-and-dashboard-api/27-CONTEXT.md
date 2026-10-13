@@ -23,7 +23,7 @@ This phase delivers a production-ready FastAPI platform service behind an Nginx 
 - **D-03**: All high-volume telemetry queries (such as alerts and audits) on partitioned tables leverage **cursor-based pagination** using `(detected_at, id)` as the cursor keys. Enforcing strict cursor constraints on the range-partitioned column `detected_at` enables PostgreSQL's query planner to perform instant **partition pruning**, ensuring sub-millisecond query execution regardless of database size.
 
 ### Sentinel Agent Liveness Resolution (Heartbeats)
-- **D-04**: Agents maintain heartbeat state in Redis under `agent:heartbeat:{agent_id}` with a 120-second TTL. The Platform Service runs a reactive, lightweight background listener subscribing to Redis Keyspace Notifications (`__keyevent@0__:expired`). When an agent's heartbeat TTL expires, the listener receives the event and executes an async write to update that Sentinel's database status to `offline`, completely eliminating periodic SQL polling overhead.
+- **D-04**: Sentinels ship heartbeats directly to the Ingestion Service via secured mTLS. The Ingestion Service parses these heartbeats and records the liveness state in Redis under `agent:heartbeat:{agent_id}` with a 120-second TTL on behalf of the agent. The Platform Service runs a reactive, lightweight background listener subscribing to Redis Keyspace Notifications (`__keyevent@0__:expired`). When an agent's heartbeat TTL expires, the listener receives the event and executes an async write to update that Sentinel's database status to `offline`, completely eliminating periodic SQL polling overhead.
 
 ### the agent's Discretion
 - Choice of standard FastAPI logging, CORS, and request middleware setups is deferred to the agent.
