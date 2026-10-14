@@ -1,0 +1,13 @@
+Host sentinel
+  HostName 127.0.0.1
+  User vagrant
+  Port 2200
+  UserKnownHostsFile /dev/null
+  StrictHostKeyChecking no
+  PasswordAuthentication no
+  IdentityFile D:/cadoc/test-env/.vagrant/machines/sentinel/virtualbox/private_key
+  IdentitiesOnly yes
+  LogLevel FATAL
+  PubkeyAcceptedKeyTypes +ssh-rsa
+  HostKeyAlgorithms +ssh-rsa
+

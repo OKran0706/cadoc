@@ -1,3 +1,4 @@
+client_id: "acme-corp.sentinel-node-staging"
 telemetry:
   vault_ca_cert: "secret/canary/sentinel-a:ca_cert"
   vault_client_cert: "secret/canary/sentinel-a:client_cert"

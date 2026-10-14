@@ -91,7 +91,7 @@ JOIN_RESPONSE=$(curl -sf --max-time 10 -X POST \
     "http://${SERVER_IP}:${INGEST_PORT}/bootstrap/join" \
     -H "Authorization: Bearer ${USER_TOKEN}" \
     -H "Content-Type: application/json" \
-    -d '{"client_id": "sentinel-node-staging", "server_id": "canary-server"}' \
+    -d '{"company_slug": "acme-corp", "sentinel_id": "sentinel-node-staging"}' \
     2>/dev/null || echo "REQUEST_FAILED")
 
 if [ "$JOIN_RESPONSE" = "REQUEST_FAILED" ]; then
@@ -191,6 +191,7 @@ RECENT_EVENTS=$(vagrant ssh server \
         --tail=50 canary-ingestion-worker 2>/dev/null | \
         grep -cE 'audit_event|event.*published|ingest.*POST|sentinel' || echo 0" \
     2>/dev/null || echo "0")
+RECENT_EVENTS=$(echo "$RECENT_EVENTS" | tr -d '\r' | grep -o '[0-9]\+' | head -n 1)
 
 if [ "${RECENT_EVENTS:-0}" -gt "0" ]; then
     echo "✓ ${RECENT_EVENTS} telemetry events detected on canary-server"

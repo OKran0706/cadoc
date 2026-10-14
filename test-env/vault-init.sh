@@ -25,10 +25,9 @@ echo "Configuring Vault PKI engine..."
 vault secrets enable pki || true
 vault secrets tune -max-lease-ttl=8760h pki
 
-echo "Generating Root CA..."
-vault write pki/root/generate/internal \
-    common_name="Canary Root CA" \
-    ttl=8760h
+echo "Importing existing CA certificate and key into Vault PKI..."
+cat /certs/ca.key /certs/ca.crt > /tmp/ca-bundle.pem
+vault write pki/config/ca pem_bundle=@/tmp/ca-bundle.pem
 
 echo "Configuring PKI URLs..."
 vault write pki/config/urls \

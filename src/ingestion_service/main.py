@@ -50,21 +50,22 @@ def _extract_client_id(request: Request) -> str:
     """
     Resolve Sentinel identity from trusted proxy headers.
     """
-    direct_cn = request.headers.get("X-Client-Cert-CN", "").strip()
-    if direct_cn:
-        return direct_cn
-
     subject_dn = (
         request.headers.get("X-Client-Cert-DN", "").strip()
         or request.headers.get("X-SSL-Client-S-DN", "").strip()
     )
-    if not subject_dn:
-        return ""
+    cn = ""
+    if subject_dn:
+        match = re.search(r"CN\s*=\s*([^,/]+)", subject_dn)
+        if match:
+            cn = match.group(1).strip()
 
-    match = re.search(r"CN\s*=\s*([^,/]+)", subject_dn)
-    if match:
-        return match.group(1).strip()
-    return ""
+    if not cn:
+        cn = request.headers.get("X-Client-Cert-CN", "").strip()
+
+    if cn and cn.endswith(".canary.local"):
+        cn = cn.removesuffix(".canary.local")
+    return cn
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -176,12 +177,12 @@ async def bootstrap_join(
         raise HTTPException(status_code=401, detail="Missing Bearer token")
     user_token = authorization.removeprefix("Bearer ")
     jwt_payload = verify_user_jwt(user_token)
-    if not check_rbac(jwt_payload, request.client_id, request.server_id):
+    if not check_rbac(jwt_payload, request.company_slug, request.sentinel_id):
         raise HTTPException(status_code=403, detail="Insufficient permissions to bootstrap this sentinel")
-    join_token = mint_join_token(request.client_id, request.server_id)
+    join_token = mint_join_token(request.company_slug, request.sentinel_id)
     logger.info(
         "BOOTSTRAP_JOIN: issued join token for client=%s server=%s user=%s",
-        request.client_id, request.server_id, jwt_payload.get("sub"),
+        request.company_slug, request.sentinel_id, jwt_payload.get("sub"),
     )
     return {"join_token": join_token, "expires_in": 900}
 
@@ -230,7 +231,12 @@ async def bootstrap_renew_credentials(
 
     # 2. Ratchet Token Check (from Vault)
     vault_client = get_vault_client()
-    kv_path = f"canary/sentinels/{client_id}/identity"
+    parts = client_id.split(".", 1)
+    if len(parts) == 2:
+        company_slug, sentinel_id = parts
+        kv_path = f"canary/tenants/{company_slug}/sentinels/{sentinel_id}/identity"
+    else:
+        kv_path = f"canary/sentinels/{client_id}/identity"
     current_expected = None
     previous_expected = None
 
