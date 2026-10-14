@@ -33,7 +33,7 @@ mkdir -p /opt/sentinel/config
 # 4. Write sentinel.yaml — points watchdog to VM 1's NGINX LB (mTLS)
 echo "--- Writing sentinel.yaml ---"
 cat > /opt/sentinel/config/sentinel.yaml << 'EOF'
-client_id: "sentinel-node-staging"
+client_id: "acme-corp.sentinel-node-staging"
 watchdog:
   ingestion_url: "https://192.168.56.11:8443/ingest"
 signing:

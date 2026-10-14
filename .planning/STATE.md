@@ -1,24 +1,24 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.6
-milestone_name: milestone
-status: completed
-last_updated: "2026-05-17T16:58:32.942Z"
-last_activity: 2026-05-17 -- Phase 27 marked complete
+milestone_name: v1.6 Trusted Identity & Orchestration
+status: in_progress
+last_updated: "2026-05-17T23:30:00.000Z"
+last_activity: 2026-05-17 -- Phase 23 (Dynamic PKI) discussions completed and context locked
 progress:
-  total_phases: 2
-  completed_phases: 2
-  total_plans: 2
-  completed_plans: 2
-  percent: 100
+  total_phases: 27
+  completed_phases: 24
+  total_plans: 15
+  completed_plans: 12
+  percent: 88
 ---
 
 ## Current Position
 
-Phase: 27 — COMPLETE
-Plan: 1 of 1
-Status: Phase 27 complete
-Last activity: 2026-05-17 -- Phase 27 marked complete
+Phase: 23 â€” RESEARCH
+Plan: 0 of 1
+Status: Discuss phase completed; context locked in 23-CONTEXT.md.
+Last activity: 2026-05-17 -- Defined Brokered PKI strategy with 24h TTL.
 
 ## Accumulated Context
 
@@ -26,13 +26,34 @@ Last activity: 2026-05-17 -- Phase 27 marked complete
 
 - v1.3 established a stable, unified Auditd-only architecture.
 - Pivot to Auditd completed, removing eBPF dependencies.
-- v1.4 focus: Structural hardening, error handling, and lifecycle management.
+- v1.4 focus: Structural hardening, error handling, and lifecycle management (Phases 14-17 complete).
 - Phase 18 added: Test if sentinel is ready for production.
 - Phase 22 completed: Secure Identity Bootstrapping (mTLS + JWT Join Tokens).
-- Phase 25 added: Vault-less Sentinel Architecture (Brokered Secrets).
-- Phase 26 added: Deploy multi-node staging environment with 2 Vagrant VMs.
-- Phase 27 added: Multi-Tenant Platform and Dashboard API
-- Phase 28 added: Fetch system metrics in heartbeat
+- Phase 25 complete: Vault-less Sentinel Architecture (Brokered Secrets).
+- Phase 26 complete: Deploy multi-node staging environment with 2 Vagrant VMs.
+- Phase 27 complete: Multi-Tenant Platform and Dashboard API.
+- Phase 28 complete: Fetch system metrics in heartbeat (real-time telemetry).
+
+## Progress
+
+| Phase                    | Milestone | Plans | Status   | Completed  |
+| ------------------------ | --------- | ----- | -------- | ---------- |
+| 28. System Metrics in HB | v1.6      | 1/1   | Complete | 2026-05-18 |
+| 27. Dashboard API        | v1.6      | 1/1   | Complete | 2026-05-17 |
+| 26. Multi-node Staging   | v1.6      | 1/1   | Complete | 2026-05-17 |
+| 25. Vault-less Arch      | v1.6      | 1/1   | Complete | 2026-05-17 |
+| 24. Lease Management     | v1.6      | 0/1   | Pending  | -          |
+| 23. Dynamic PKI          | v1.6      | 1/1   | Complete | 2026-05-18 |
+| 22. Identity Bootstrap   | v1.6      | 1/1   | Complete | 2026-05-16 |
+| 21. Hardening & Defence  | v1.5      | 2/2   | Complete | 2026-05-08 |
+| 20. Operational Reliab.  | v1.5      | 4/4   | Complete | 2026-05-08 |
+| 19. Critical Safety      | v1.5      | 2/2   | Complete | 2026-05-08 |
+| 18. Prod Ready           | v1.4      | 1/1   | Complete | 2026-04-26 |
+| 17. Graceful Exit        | v1.4      | 1/1   | Complete | 2026-05-08 |
+| 16. Sec & Kill           | v1.4      | 1/1   | Complete | 2026-05-08 |
+| 15. Err Hardening        | v1.4      | 1/1   | Complete | 2026-05-08 |
+| 14. Boot Foundat         | v1.4      | 1/1   | Complete | 2026-05-08 |
+| 13. Auditd Pivot         | v1.3      | 4/4   | Complete | 2026-04-22 |
 
 ## Deferred Items
 

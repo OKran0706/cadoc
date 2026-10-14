@@ -20,7 +20,28 @@ path "auth/token/lookup-self" { capabilities = ["read"] }
 path "sys/capabilities-self" { capabilities = ["update"] }
 EOF
 
-# 3. Provision Secrets
+# 3. Setup PKI Engine
+echo "Configuring Vault PKI engine..."
+vault secrets enable pki || true
+vault secrets tune -max-lease-ttl=8760h pki
+
+echo "Importing existing CA certificate and key into Vault PKI..."
+cat /certs/ca.key /certs/ca.crt > /tmp/ca-bundle.pem
+vault write pki/config/ca pem_bundle=@/tmp/ca-bundle.pem
+
+echo "Configuring PKI URLs..."
+vault write pki/config/urls \
+    issuing_certificates="http://127.0.0.1:8200/v1/pki/ca" \
+    crl_distribution_points="http://127.0.0.1:8200/v1/pki/crl"
+
+echo "Creating Sentinel-Agent PKI role..."
+vault write pki/roles/sentinel-agent \
+    allowed_domains="canary.local" \
+    allow_subdomains=true \
+    max_ttl="24h" \
+    generate_lease=true
+
+# 4. Provision Secrets
 echo "Writing generated certificates into Vault KV..."
 vault kv put secret/canary/sentinel-a \
     ca_cert=@/certs/ca.crt \

@@ -19,7 +19,15 @@
     - Sensitive headers and tokens are redacted from all Sentinel logs.
     - Deployment script supports one-time join tokens.
 
-- [ ] **Phase 23: Dynamic PKI Integration**
+- [x] **Phase 23: Dynamic PKI Integration**
+  - Goal: Integrate with Vault's PKI engine to issue short-lived mTLS certificates for Sentinels dynamically after identity bootstrapping.
+  - Requirements: PKI-01, PKI-02
+  - Success Criteria:
+    - Sentinel mTLS certs have 24-hour TTL and are issued by Vault PKI.
+    - Sentinel hot-swaps credentials in-memory without restart.
+  - Plans:
+    - [x] 23-01: Dynamic PKI Integration (completed 2026-05-18)
+
 - [ ] **Phase 24: Operational Resilience (Lease Management)**
 - [ ] **Phase 25: Vault-less Sentinel Architecture (Brokered Secrets)**
   - Goal: Remove direct Sentinel-to-Vault communication; proxy all secrets via Ingestion Service.
