@@ -96,7 +96,7 @@ BEGIN
     FROM pg_indexes
     WHERE schemaname = v_schema
       AND indexname IN (
-          'sentinel_agents_last_heartbeat_idx',
+          'sentinel_agents_last_connected_at_idx',
           'canary_decoy_files_status_idx',
           'tamper_alerts_detected_at_idx',
           'tamper_alerts_severity_idx',
@@ -153,7 +153,7 @@ INSERT INTO sentinel_agents (
     git_commit,
     status,
     capabilities_proof,
-    last_heartbeat
+    last_connected_at
 )
 SELECT
     id,

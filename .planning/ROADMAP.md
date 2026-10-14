@@ -153,3 +153,13 @@ Plans:
 
 Plans:
 - [x] 27-01: Multi-Tenant Platform and Dashboard API (completed 2026-05-17)
+
+### Phase 28: Fetch system metrics in heartbeat
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 27
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 28 to break down)

@@ -30,6 +30,9 @@ import (
 	"github.com/your-org/canary/sentinel/internal/selfmon"
 	"github.com/your-org/canary/sentinel/internal/signer"
 	"github.com/your-org/canary/sentinel/internal/sysutil"
+
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/mem"
 )
 
 func main() {
@@ -439,10 +442,31 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				var cpuPercent float64
+				percents, err := cpu.Percent(100*time.Millisecond, false)
+				if err == nil && len(percents) > 0 {
+					cpuPercent = percents[0]
+				}
+
+				var memTotal, memUsed uint64
+				var memPercent float64
+				memInfo, err := mem.VirtualMemory()
+				if err == nil {
+					memTotal = memInfo.Total
+					memUsed = memInfo.Used
+					memPercent = memInfo.UsedPercent
+				}
+
 				event := map[string]interface{}{
 					"type":           "SENTINEL_HEARTBEAT",
 					"source_process": "sentinel-a",
-					"id":             "sentinel-a",
+					"id":             cfg.ClientID,
+					"metrics": map[string]interface{}{
+						"cpu_percent":        cpuPercent,
+						"memory_total_bytes": memTotal,
+						"memory_used_bytes":  memUsed,
+						"memory_percent":     memPercent,
+					},
 				}
 				envelope, _, err := s.SignEvent(event)
 				if err != nil {

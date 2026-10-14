@@ -206,7 +206,7 @@ BEGIN
             git_commit VARCHAR(40) NOT NULL,
             status VARCHAR(20) NOT NULL,
             capabilities_proof JSONB NOT NULL DEFAULT '{}'::jsonb,
-            last_heartbeat TIMESTAMPTZ,
+            last_connected_at TIMESTAMPTZ,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             CONSTRAINT sentinel_agents_status_chk CHECK (
@@ -288,8 +288,8 @@ BEGIN
         v_schema_name
     );
     EXECUTE format(
-        'CREATE INDEX %I ON %I.sentinel_agents (last_heartbeat)',
-        'sentinel_agents_last_heartbeat_idx',
+        'CREATE INDEX %I ON %I.sentinel_agents (last_connected_at)',
+        'sentinel_agents_last_connected_at_idx',
         v_schema_name
     );
     EXECUTE format(

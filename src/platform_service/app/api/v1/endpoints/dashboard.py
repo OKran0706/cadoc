@@ -1,10 +1,16 @@
 import base64
+import json
+import asyncio
+import re
+import redis.asyncio as redis
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from pydantic import BaseModel
+from app.core.config import settings
 from app.core.database import get_db_session, set_tenant_search_path
 from app.core.security import verify_user_jwt
 
@@ -62,7 +68,7 @@ async def get_alerts(
     # Prunes unused monthly tables by directly searching partition key detected_at
     sql = f"""
         SELECT id, server_id, event_type, severity, details, detected_at::text
-        FROM tamper_alerts
+        FROM client_{company_slug}.tamper_alerts
         WHERE 1=1
         {pruning_limit}
         ORDER BY detected_at DESC, id DESC
@@ -98,3 +104,115 @@ async def get_alerts(
     ]
 
     return PagedAlertsResponse(data=alerts_list, next_cursor=next_cursor, has_more=has_more)
+
+
+class AgentResponse(BaseModel):
+    id: str
+    server_id: str
+    version: Optional[str]
+    git_commit: Optional[str]
+    status: str
+    last_connected_at: Optional[str]
+
+
+@router.get("/agents", response_model=list[AgentResponse])
+async def list_agents(
+    db: AsyncSession = Depends(get_db_session),
+    admin_claims: dict = Depends(verify_user_jwt)
+):
+    """
+    Exposes high-speed, direct database query of registered tenant agents.
+    """
+    company_slug = admin_claims["company_slug"]
+    if company_slug == "global":
+        raise HTTPException(status_code=400, detail="Scope mismatch: Endpoint requires tenant authorization context")
+    
+    await set_tenant_search_path(db, company_slug)
+    
+    # Safety check to prevent SQL injection
+    if not re.match(r"^[a-zA-Z0-9_-]+$", company_slug):
+        raise HTTPException(status_code=400, detail="Invalid tenant identifier")
+
+    sql = f"""
+        SELECT id, server_id, version, git_commit, status, last_connected_at::text
+        FROM client_{company_slug}.sentinel_agents
+        ORDER BY last_connected_at DESC NULLS LAST, id DESC
+    """
+    result = await db.execute(text(sql))
+    rows = result.fetchall()
+
+    return [
+        AgentResponse(
+            id=str(r.id),
+            server_id=str(r.server_id),
+            version=r.version,
+            git_commit=r.git_commit,
+            status=r.status,
+            last_connected_at=r.last_connected_at
+        ) for r in rows
+    ]
+
+
+@router.get("/agents/metrics")
+async def get_agents_metrics(
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    admin_claims: dict = Depends(verify_user_jwt)
+):
+    """
+    Streams live telemetry metrics from Redis for the registered agents of the tenant in real-time.
+    """
+    company_slug = admin_claims["company_slug"]
+    if company_slug == "global":
+        raise HTTPException(status_code=400, detail="Scope mismatch: Endpoint requires tenant authorization context")
+    
+    async def event_generator():
+        r = redis.from_url(settings.REDIS_URL, decode_responses=True)
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                
+                await set_tenant_search_path(db, company_slug)
+                
+                # Safety check to prevent SQL injection
+                if not re.match(r"^[a-zA-Z0-9_-]+$", company_slug):
+                    break
+
+                sql = f"""
+                    SELECT id, server_id, status FROM client_{company_slug}.sentinel_agents
+                """
+                result = await db.execute(text(sql))
+                agents = result.fetchall()
+                
+                metrics_payload = {}
+                for agent in agents:
+                    agent_id = agent.id
+                    status = agent.status
+                    
+                    redis_key = f"agent:heartbeat:{company_slug}:{agent_id}"
+                    heartbeat_val = await r.get(redis_key)
+                    
+                    metrics = None
+                    if heartbeat_val:
+                        try:
+                            hb_data = json.loads(heartbeat_val)
+                            metrics = hb_data.get("metrics")
+                        except Exception:
+                            pass
+                    
+                    metrics_payload[str(agent_id)] = {
+                        "server_id": str(agent.server_id),
+                        "status": status,
+                        "metrics": metrics
+                    }
+                
+                yield f"data: {json.dumps(metrics_payload)}\n\n"
+                await asyncio.sleep(2)
+                
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await r.close()
+            
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

@@ -6,14 +6,14 @@ If (!(Test-Path certs)) {
 Set-Location -Path certs
 
 Write-Host "Generating CA..."
-openssl req -new -x509 -keyout ca.key -out ca.crt -days 365 -nodes -subj "//CN=Canary CA"
+openssl req -new -x509 -keyout ca.key -out ca.crt -days 365 -nodes -subj "/CN=Canary CA"
 
 Write-Host "Generating Server (Kafka) Certs..."
-openssl req -newkey rsa:2048 -nodes -keyout kafka.key -out kafka.csr -subj "//CN=localhost"
+openssl req -newkey rsa:2048 -nodes -keyout kafka.key -out kafka.csr -subj "/CN=localhost"
 openssl x509 -req -in kafka.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out kafka.crt -days 365
 
 Write-Host "Generating Client (Sentinel) Certs..."
-openssl req -newkey rsa:2048 -nodes -keyout client.key -out client.csr -subj "//CN=sentinel-client"
+openssl req -newkey rsa:2048 -nodes -keyout client.key -out client.csr -subj "/CN=agent:acme:sentinel-node-staging"
 openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out client.crt -days 365
 
 Write-Host "Formatting for Bitnami Kafka (PEM)..."

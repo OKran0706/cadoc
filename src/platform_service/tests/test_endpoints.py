@@ -185,3 +185,90 @@ async def test_dashboard_alerts_with_cursor_pagination():
     
     decoded = base64.b64decode(res_data["next_cursor"].encode("utf-8")).decode("utf-8")
     assert "2026-05-17T22:15:00+00:00||alert-uuid-1" in decoded
+
+@pytest.mark.asyncio
+async def test_dashboard_agents_listing(monkeypatch):
+    mock_db.reset_mock()
+    mock_agent_row = MagicMock(
+        id="sentinel-uuid-1",
+        server_id="server-uuid-1",
+        status="online",
+        version="1.5.0",
+        git_commit="abcdef",
+        last_connected_at="2026-05-18T19:12:13Z"
+    )
+    
+    mock_db.execute.side_effect = [
+        MagicMock(scalar=MagicMock(return_value="client_client-a")), # set search path
+        MagicMock(fetchall=MagicMock(return_value=[mock_agent_row])) # Select agents
+    ]
+
+    # Mock redis get call
+    mock_redis = AsyncMock()
+    mock_redis.get.return_value = '{"metrics": {"cpu_percent": 1.2, "memory_percent": 45.6}}'
+    
+    # Mock redis client instantiation in endpoint
+    import redis.asyncio as aioredis
+    monkeypatch.setattr(aioredis, "from_url", lambda url, **kwargs: mock_redis)
+
+    headers = get_auth_headers("client-a")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.get("/api/v1/dashboard/agents", headers=headers)
+        
+    assert response.status_code == 200
+    res_data = response.json()
+    assert len(res_data) == 1
+    assert res_data[0]["id"] == "sentinel-uuid-1"
+    assert res_data[0]["status"] == "online"
+
+@pytest.mark.asyncio
+async def test_dashboard_agents_metrics_sse(monkeypatch):
+    mock_db.reset_mock()
+    mock_agent_row = MagicMock(
+        id="sentinel-uuid-1",
+        server_id="server-uuid-1",
+        status="online",
+        version="1.5.0",
+        git_commit="abcdef",
+        last_connected_at="2026-05-18T19:12:13Z"
+    )
+    
+    mock_result_search = MagicMock(scalar=MagicMock(return_value="client_client-a"))
+    mock_result_agents = MagicMock(fetchall=MagicMock(return_value=[mock_agent_row]))
+    
+    def execute_side_effect(statement, *args, **kwargs):
+        if "SET search_path" in str(statement):
+            return mock_result_search
+        return mock_result_agents
+        
+    mock_db.execute.side_effect = execute_side_effect
+
+    # Mock redis get
+    mock_redis = AsyncMock()
+    mock_redis.get.return_value = '{"metrics": {"cpu_percent": 5.0, "memory_percent": 50.0}}'
+
+    import redis.asyncio as aioredis
+    monkeypatch.setattr(aioredis, "from_url", lambda url, **kwargs: mock_redis)
+
+    # Mock request.is_disconnected to return False then True to exit infinite loop
+    from fastapi import Request
+    monkeypatch.setattr(Request, "is_disconnected", AsyncMock(side_effect=[False, True]))
+
+    # Mock asyncio.sleep to execute instantly
+    import asyncio
+    async def mock_sleep(delay):
+        return
+    monkeypatch.setattr(asyncio, "sleep", mock_sleep)
+
+    headers = get_auth_headers("client-a")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as ac:
+        async with ac.stream("GET", "/api/v1/dashboard/agents/metrics", headers=headers) as response:
+            assert response.status_code == 200
+            lines = []
+            async for line in response.aiter_lines():
+                if line:
+                    lines.append(line)
+                if len(lines) >= 2: # just read first couple of packets
+                    break
+                    
+    assert any("5.0" in l for l in lines)

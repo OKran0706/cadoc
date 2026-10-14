@@ -149,7 +149,7 @@ INSERT INTO sentinel_agents (
     git_commit,
     status,
     capabilities_proof,
-    last_heartbeat
+    last_connected_at
 )
 SELECT
     s.id,
@@ -157,7 +157,7 @@ SELECT
     seed.git_commit,
     seed.status,
     seed.capabilities_proof::jsonb,
-    seed.last_heartbeat
+    seed.last_connected_at
 FROM (
     VALUES
         (
@@ -184,7 +184,7 @@ FROM (
             '{"caps": [], "auditd": false, "kernel_lockdown": "unknown"}',
             now() - interval '3 hours'
         )
-) AS seed(hostname, version, git_commit, status, capabilities_proof, last_heartbeat)
+) AS seed(hostname, version, git_commit, status, capabilities_proof, last_connected_at)
 JOIN servers s ON s.hostname = seed.hostname;
 
 INSERT INTO canary_decoy_files (

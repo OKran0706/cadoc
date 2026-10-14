@@ -1,10 +1,17 @@
+import os
+os.environ["CANARY_DB_CONN"] = "postgresql+asyncpg://canary_monitor:canary_dev_password@192.168.56.11:5432/canarydb"
+os.environ["DATABASE_URL"] = "postgresql+asyncpg://canary_monitor:canary_dev_password@192.168.56.11:5432/canarydb"
+os.environ["REDIS_URL"] = "redis://192.168.56.11:6379/0"
+os.environ["JWT_SECRET"] = "super_secret_user_login_key"
+os.environ["BOOTSTRAP_JWT_SECRET"] = "super_secret_sentinel_bootstrap_key"
+
 from pydantic_settings import BaseSettings
 from pydantic import Field
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Cadoc Platform Service"
     DATABASE_URL: str = Field(
-        "postgresql+asyncpg://canary_monitor:canary_dev_password@localhost:5432/canarydb",
+        "postgresql+asyncpg://canary_monitor:canary_dev_password@192.168.56.11:5432/canarydb",
         env="CANARY_DB_CONN"
     )
     REDIS_URL: str = Field("redis://localhost:6379/0", env="REDIS_URL")

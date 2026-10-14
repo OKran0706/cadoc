@@ -3,8 +3,10 @@
 -- Run as superuser on canarydb
 
 -- ============================================================
--- 0. canary_monitor schema — append-only alerts table
+-- 0. Load required extensions and schemas
 -- ============================================================
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 CREATE SCHEMA IF NOT EXISTS canary_monitor;
 
 CREATE TABLE IF NOT EXISTS canary_monitor.alerts (

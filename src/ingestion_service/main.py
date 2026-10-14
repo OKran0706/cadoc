@@ -116,7 +116,11 @@ async def forward_to_kafka(topic: str, value: str):
         logger.error(f"KAFKA_FORWARD_FAILED: {e}")
 
 @app.post("/ingest", status_code=202)
-async def handle_ingest(envelope: IngestEnvelope, background_tasks: BackgroundTasks):
+async def handle_ingest(
+    envelope: IngestEnvelope,
+    background_tasks: BackgroundTasks,
+    request: Request,
+):
     """
     Unified ingestion endpoint for all Sentinel telemetry.
     """
@@ -143,9 +147,25 @@ async def handle_ingest(envelope: IngestEnvelope, background_tasks: BackgroundTa
 
     # 2. Unified Routing
     if event_type == "SENTINEL_HEARTBEAT":
+        # Cryptographic CN-based tenant and identity extraction (No fallbacks!)
+        client_cn = _extract_client_id(request)
+        match = re.match(r"^agent:([^:]+):([^:]+)$", client_cn)
+        if not match:
+            logger.error(f"CERTIFICATE_CN_MALFORMED: Expected agent:{{slug}}:{{id}}, got CN={client_cn}")
+            raise HTTPException(status_code=403, detail="Bad credentials — invalid certificate format")
+        
+        company_slug = match.group(1)
+        resolved_sentinel_id = match.group(2)
+
+        import uuid
+        try:
+            uuid.UUID(resolved_sentinel_id)
+        except ValueError:
+            resolved_sentinel_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, resolved_sentinel_id))
+
         # Synchronous-path update (Redis is low latency)
-        await liveness_mgr.update_liveness(sentinel_id, envelope.payload)
-        logger.info(f"HEARTBEAT_INGESTED: {sentinel_id}")
+        await liveness_mgr.update_liveness(resolved_sentinel_id, envelope.payload, company_slug=company_slug)
+        logger.info(f"HEARTBEAT_INGESTED: {company_slug}/{resolved_sentinel_id}")
     else:
         # Asynchronous-path forwarding (Kafka)
         background_tasks.add_task(forward_to_kafka, KAFKA_TOPIC, envelope.payload)

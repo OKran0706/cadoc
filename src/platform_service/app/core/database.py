@@ -10,6 +10,8 @@ db_url = settings.DATABASE_URL
 if db_url.startswith("postgresql://"):
     db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
+print("DATABASE CONNECTION URL BEING USED:", db_url)
+
 engine = create_async_engine(
     db_url,
     pool_size=20,

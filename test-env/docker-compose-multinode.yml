@@ -14,7 +14,7 @@ services:
       openssl req -new -newkey rsa:2048 -nodes -keyout server.key -out server.csr -subj '/CN=canary-ingestion-lb' -addext 'subjectAltName = DNS:canary-ingestion-lb, DNS:localhost, IP:127.0.0.1, IP:192.168.56.1, IP:192.168.56.11' &&
       openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt -days 365 -copy_extensions copyall &&
       echo 'Generating Client (Sentinel) Certs...' &&
-      openssl req -new -newkey rsa:2048 -nodes -keyout client.key -out client.csr -subj '/CN=sentinel-client' &&
+      openssl req -new -newkey rsa:2048 -nodes -keyout client.key -out client.csr -subj '/CN=agent:acme:sentinel-node-staging' &&
       openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out client.crt -days 365 &&
       cat server.crt server.key > kafka.keystore.pem &&
       cp server.crt kafka.crt && cp server.key kafka.key &&
