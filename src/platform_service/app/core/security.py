@@ -5,7 +5,7 @@ from fastapi import HTTPException, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.core.config import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["sha256_crypt", "bcrypt"], deprecated="auto")
 security_bearer = HTTPBearer()
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
