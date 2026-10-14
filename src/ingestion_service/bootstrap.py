@@ -51,10 +51,34 @@ def generate_signer_key() -> str:
     return key_bytes.hex()
 
 
+def generate_pki_certificate(company_slug: str, sentinel_id: str) -> dict:
+    """
+    Generates a new mTLS certificate for a sentinel using Vault's PKI engine.
+    The CN follows the format {company_slug}.{sentinel_id}.canary.local.
+    """
+    vault_client = get_vault_client()
+    common_name = f"{company_slug}.{sentinel_id}.canary.local"
+
+    try:
+        result = vault_client.secrets.pki.generate_certificate(
+            name="sentinel-agent",
+            common_name=common_name,
+            mount_point="pki"
+        )
+        return {
+            "ca_cert": result['data']['issuing_ca'],
+            "client_cert": result['data']['certificate'],
+            "client_key": result['data']['private_key']
+        }
+    except Exception as exc:
+        logger.error("PKI_GENERATION_ERROR: identity=%s error=%s", common_name, exc)
+        raise HTTPException(status_code=500, detail="Failed to generate dynamic mTLS certificate")
+
+
 class BootstrapJoinRequest(BaseModel):
     """Body for POST /bootstrap/join."""
-    client_id: str
-    server_id: str
+    company_slug: str
+    sentinel_id: str
 
 
 # ---------------------------------------------------------------------------
@@ -84,14 +108,13 @@ def verify_user_jwt(token: str) -> dict:
 # RBAC
 # ---------------------------------------------------------------------------
 
-def check_rbac(jwt_payload: dict, client_id: str, server_id: str) -> bool:
+def check_rbac(jwt_payload: dict, company_slug: str, sentinel_id: str) -> bool:
     """
     Check whether the authenticated user has permission to bootstrap
-    the specified client_id on server_id.
-
-    # TODO: wire to RBAC DB table — query permissions for jwt_payload["sub"]
-    #       against (client_id, server_id) tuple before issuing a join token.
+    the specified sentinel_id for company_slug.
     """
+    # TODO: wire to RBAC DB table — query permissions for jwt_payload["sub"]
+    #       against (company_slug, sentinel_id) tuple before issuing a join token.
     return True
 
 
@@ -141,17 +164,17 @@ def _assert_jti_unused(jti: str) -> None:
 # FIX CR-01: JWT-based Join Token (replaces Vault response-wrapping)
 # ---------------------------------------------------------------------------
 
-def mint_join_token(client_id: str, server_id: str) -> str:
+def mint_join_token(company_slug: str, sentinel_id: str) -> str:
     """
-    Issue a signed JWT Join Token that embeds client_id and server_id.
+    Issue a signed JWT Join Token that embeds company_slug and sentinel_id.
 
     The token is signed with BOOTSTRAP_JWT_SECRET (separate from the user-login
     JWT_SECRET to enforce key separation between authentication domains).
 
     Payload:
         sub  — "sentinel-bootstrap"
-        client_id — the Sentinel client being enrolled
-        server_id — the server this Sentinel belongs to
+        company_slug — the tenant slug
+        sentinel_id  — the unique agent name
         jti  — unique token ID (used for one-time-use Redis blacklisting)
         exp  — now + 15 minutes
 
@@ -168,8 +191,8 @@ def mint_join_token(client_id: str, server_id: str) -> str:
 
     payload = {
         "sub": "sentinel-bootstrap",
-        "client_id": client_id,
-        "server_id": server_id,
+        "company_slug": company_slug,
+        "sentinel_id": sentinel_id,
         "jti": jti,
         "iat": now,
         "exp": now + JOIN_TOKEN_TTL_SECONDS,
@@ -177,8 +200,8 @@ def mint_join_token(client_id: str, server_id: str) -> str:
 
     token: str = jwt.encode(payload, secret, algorithm=BOOTSTRAP_JWT_ALGORITHM)
     logger.info(
-        "JOIN_TOKEN_ISSUED: client_id=%s server_id=%s jti=%s",
-        client_id, server_id, jti,
+        "JOIN_TOKEN_ISSUED: company_slug=%s sentinel_id=%s jti=%s",
+        company_slug, sentinel_id, jti,
     )
     return token
 
@@ -203,7 +226,7 @@ def decode_join_token(join_token: str) -> dict:
     if payload.get("sub") != "sentinel-bootstrap":
         raise HTTPException(status_code=403, detail="Token is not a valid join token")
 
-    for required in ("client_id", "server_id", "jti"):
+    for required in ("company_slug", "sentinel_id", "jti"):
         if not payload.get(required):
             raise HTTPException(status_code=403, detail=f"Join token missing required claim: {required}")
 
@@ -224,17 +247,14 @@ def get_vault_client() -> hvac.Client:
 def fetch_sentinel_credentials(join_token: str, client_id: str = "", source_ip: str = "unknown") -> dict:
     """
     Validate the Join Token JWT, enforce one-time use via Redis JTI blacklisting,
-    then fetch the Sentinel's mTLS credential package from Vault KV.
+    then fetch the Sentinel's mTLS credential package from Vault PKI.
 
-    FIX CR-01: client_id is now extracted from the JWT payload directly,
-    eliminating the need for the caller to pass it separately.
-
-    IP PINNING: Records the source_ip in Redis to ensure subsequent renewal
-    requests come from the same host.
+    FIX CR-01: Identity is now extracted from the JWT payload directly.
     """
     # Step 1: Verify and decode the Join Token JWT.
     payload = decode_join_token(join_token)
-    resolved_client_id: str = payload["client_id"]
+    company_slug: str = payload["company_slug"]
+    sentinel_id: str = payload["sentinel_id"]
     jti: str = payload["jti"]
     exp: int = payload["exp"]
 
@@ -248,22 +268,21 @@ def fetch_sentinel_credentials(join_token: str, client_id: str = "", source_ip: 
     renewal_token = secrets.token_hex(32)
 
     logger.info(
-        "BOOTSTRAP_CRED_REQUEST: client_id=%s jti=%s",
-        resolved_client_id, jti,
+        "BOOTSTRAP_CRED_REQUEST: identity=%s.%s jti=%s",
+        company_slug, sentinel_id, jti,
     )
 
-    # Step 3: Fetch the mTLS credential package from Vault KV using admin token.
-    vault_client = get_vault_client()
-    kv_path = f"canary/sentinels/{resolved_client_id}"
-
-    # Generate the initial Signer Key (Brokered)
+    # Step 3: Generate dynamic mTLS credentials and Signer Key (Brokered)
+    pki_creds = generate_pki_certificate(company_slug, sentinel_id)
     signer_key = generate_signer_key()
 
-    # Store the Renewal Token and Signer Key in Vault alongside the credentials
-    # Initial state: current is the new token, previous is None
+    # Store the Renewal Token and Signer Key in Vault
+    # Path is scoped by company_slug to ensure multi-tenant isolation in KV
+    identity_path = f"canary/tenants/{company_slug}/sentinels/{sentinel_id}/identity"
     try:
+        vault_client = get_vault_client()
         vault_client.secrets.kv.v2.create_or_update_secret(
-            path=f"canary/sentinels/{resolved_client_id}/identity",
+            path=identity_path,
             secret={
                 "current_token": renewal_token,
                 "previous_token": None,
@@ -275,32 +294,13 @@ def fetch_sentinel_credentials(join_token: str, client_id: str = "", source_ip: 
         logger.error("BOOTSTRAP_TOKEN_STORE_ERROR: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to store renewal assets in Vault")
 
-    try:
-        secret = vault_client.secrets.kv.v2.read_secret_version(
-            path=kv_path, mount_point="secret"
-        )
-        data: dict = secret["data"]["data"]
-    except hvac.exceptions.InvalidPath:
-        logger.warning("BOOTSTRAP_KV_NOT_FOUND: path=secret/data/%s", kv_path)
-        raise HTTPException(
-            status_code=404,
-            detail=f"Sentinel credentials not found at secret/{kv_path}",
-        )
-    except Exception as exc:
-        logger.error("BOOTSTRAP_KV_ERROR: %s", exc)
-        raise HTTPException(status_code=500, detail="Failed to read credentials from Vault")
-
-    ca_cert = data.get("ca_cert", "")
-    client_cert = data.get("client_cert", "")
-    client_key = data.get("client_key", "")
-
-    if not ca_cert or not client_cert or not client_key:
-        logger.error("BOOTSTRAP_INCOMPLETE_CREDS: path=secret/data/%s", kv_path)
-        raise HTTPException(status_code=500, detail="Incomplete credential package in Vault")
+    ca_cert = pki_creds["ca_cert"]
+    client_cert = pki_creds["client_cert"]
+    client_key = pki_creds["client_key"]
 
     logger.info(
-        "BOOTSTRAP_CREDS_ISSUED: client_id=%s path=secret/data/%s",
-        resolved_client_id, kv_path,
+        "BOOTSTRAP_CREDS_ISSUED: identity=%s.%s pki=dynamic",
+        company_slug, sentinel_id,
     )
     return {
         "ca_cert": ca_cert,
@@ -313,59 +313,45 @@ def fetch_sentinel_credentials(join_token: str, client_id: str = "", source_ip: 
 
 def fetch_sentinel_credentials_by_client_id(client_id: str, is_retry: bool = False) -> dict:
     """
-    Fetch the mTLS credential package from Vault KV using the client_id directly.
+    Generate dynamic mTLS credentials and manage renewal tokens.
     Used by the /bootstrap/renew_credentials endpoint.
 
-    RATCHET:
-    - If NOT is_retry: Generates a NEW renewal token and moves current -> previous.
-    - If IS_retry: Returns the existing current token (recovery path).
+    Identity (client_id) format expected: {company_slug}.{sentinel_id}
     """
     from fastapi import HTTPException
 
+    # Split the composite ID
+    parts = client_id.split(".", 1)
+    if len(parts) != 2:
+        raise HTTPException(status_code=400, detail="Invalid client_id format - expected {company_slug}.{sentinel_id}")
+
+    company_slug, sentinel_id = parts
+
     vault_client = get_vault_client()
-    kv_path = f"canary/sentinels/{client_id}"
+    token_path = f"canary/tenants/{company_slug}/sentinels/{sentinel_id}/identity"
 
     try:
-        secret = vault_client.secrets.kv.v2.read_secret_version(
-            path=kv_path, mount_point="secret"
-        )
-        data: dict = secret["data"]["data"]
-    except hvac.exceptions.InvalidPath:
-        logger.warning("RENEW_KV_NOT_FOUND: path=secret/data/%s", kv_path)
-        raise HTTPException(
-            status_code=404,
-            detail=f"Sentinel credentials not found at secret/{kv_path}",
-        )
-    except Exception as exc:
-        logger.error("RENEW_KV_ERROR: %s", exc)
-        raise HTTPException(status_code=500, detail="Failed to read credentials from Vault")
-
-    ca_cert = data.get("ca_cert", "")
-    client_cert = data.get("client_cert", "")
-    client_key = data.get("client_key", "")
-
-    if not ca_cert or not client_cert or not client_key:
-        logger.error("RENEW_INCOMPLETE_CREDS: path=secret/data/%s", kv_path)
-        raise HTTPException(status_code=500, detail="Incomplete credential package in Vault")
-
-    # Step: Handle the Ratchet (Dual-Token logic)
-    token_path = f"canary/sentinels/{client_id}/identity"
-    
-    try:
-        # 1. Read existing token state
+        # 1. Read existing token state to handle ratchet/recovery
         token_secret = vault_client.secrets.kv.v2.read_secret_version(
             path=token_path, mount_point="secret"
         )
         token_data = token_secret["data"]["data"]
         current_token = token_data.get("current_token")
         signer_key = token_data.get("signer_key")
+
+        # Always issue a fresh cert on renewal
+        pki_creds = generate_pki_certificate(company_slug, sentinel_id)
+
+    except hvac.exceptions.InvalidPath:
+        logger.warning("RENEW_TOKEN_NOT_FOUND: path=secret/data/%s", token_path)
+        raise HTTPException(status_code=404, detail="Sentinel identity record not found")
     except Exception as exc:
         logger.error("RENEW_TOKEN_READ_ERROR: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to read token state for ratchet")
 
     if is_retry:
         # RECOVERY: The client sent the previous token. We resend the SAME current token and signer key.
-        logger.info("RENEW_RECOVERY: client_id=%s using previous token. Resending current assets.", client_id)
+        logger.info("RENEW_RECOVERY: identity=%s.%s using previous token. Resending current assets.", company_slug, sentinel_id)
         effective_token = current_token
         effective_signer_key = signer_key
     else:
@@ -387,13 +373,13 @@ def fetch_sentinel_credentials_by_client_id(client_id: str, is_retry: bool = Fal
             raise HTTPException(status_code=500, detail="Failed to ratchet renewal assets in Vault")
 
     logger.info(
-        "RENEW_CREDS_ISSUED: client_id=%s path=secret/data/%s retry=%s",
-        client_id, kv_path, is_retry
+        "RENEW_CREDS_ISSUED: identity=%s.%s pki=dynamic retry=%s",
+        company_slug, sentinel_id, is_retry
     )
     return {
-        "ca_cert": ca_cert,
-        "client_cert": client_cert,
-        "client_key": client_key,
+        "ca_cert": pki_creds["ca_cert"],
+        "client_cert": pki_creds["client_cert"],
+        "client_key": pki_creds["client_key"],
         "renewal_token": effective_token,
         "signer_key": effective_signer_key,
     }
