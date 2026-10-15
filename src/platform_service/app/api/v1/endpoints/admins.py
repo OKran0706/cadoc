@@ -427,30 +427,30 @@ async def get_client_detail(
     try:
         # Servers
         servers_res = await db.execute(text(f"""
-            SELECT id::text, hostname, ip_address, os_type, status, created_at::text
+            SELECT id::text, hostname, ip_address::text, COALESCE(specs->>'os_type', 'Linux') AS os_type, status, created_at::text
             FROM {schema}.servers ORDER BY created_at DESC
         """))
         servers = [dict(r._mapping) for r in servers_res.fetchall()]
 
         # Sentinel Agents
         agents_res = await db.execute(text(f"""
-            SELECT id::text, server_id::text, status, version, last_seen_at::text, created_at::text
-            FROM {schema}.sentinel_agents ORDER BY last_seen_at DESC NULLS LAST
+            SELECT id::text, server_id::text, status, version, last_connected_at::text AS last_seen_at, created_at::text
+            FROM {schema}.sentinel_agents ORDER BY last_connected_at DESC NULLS LAST
         """))
         agents = [dict(r._mapping) for r in agents_res.fetchall()]
 
         # Decoy Files
         decoys_res = await db.execute(text(f"""
-            SELECT id::text, server_id::text, file_path, file_type, status, planted_at::text
+            SELECT id::text, server_id::text, file_path, decoy_type AS file_type, status, planted_at::text
             FROM {schema}.canary_decoy_files ORDER BY planted_at DESC NULLS LAST
         """))
         decoys = [dict(r._mapping) for r in decoys_res.fetchall()]
 
         # Recent Tamper Alerts (last 25)
         alerts_res = await db.execute(text(f"""
-            SELECT id::text, server_id::text, file_path, alert_type, severity,
-                   triggered_at::text, resolved_at::text
-            FROM {schema}.tamper_alerts ORDER BY triggered_at DESC LIMIT 25
+            SELECT id::text, server_id::text, COALESCE(details->>'file_path', '') AS file_path, event_type AS alert_type, severity,
+                   detected_at::text AS triggered_at, NULL AS resolved_at
+            FROM {schema}.tamper_alerts ORDER BY detected_at DESC LIMIT 25
         """))
         alerts = [dict(r._mapping) for r in alerts_res.fetchall()]
 
