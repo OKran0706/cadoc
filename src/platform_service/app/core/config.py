@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     BOOTSTRAP_JWT_SECRET: str = Field("super_secret_sentinel_bootstrap_key", env="BOOTSTRAP_JWT_SECRET")
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    
+    ENABLE_RATE_LIMIT: bool = Field(False, env="ENABLE_RATE_LIMIT")
+    INITIAL_ADMIN_EMAIL: str = Field("", env="INITIAL_ADMIN_EMAIL")
+    INITIAL_ADMIN_PASSWORD: str = Field("", env="INITIAL_ADMIN_PASSWORD")
 
     class Config:
         case_sensitive = True

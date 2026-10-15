@@ -33,6 +33,7 @@ Last activity: 2026-05-17 -- Phase 27 marked complete
 - Phase 26 complete: Deploy multi-node staging environment with 2 Vagrant VMs.
 - Phase 27 complete: Multi-Tenant Platform and Dashboard API.
 - Phase 28 complete: Fetch system metrics in heartbeat (real-time telemetry).
+- Phase 29 added: Create administrative control plane
 
 ## Progress
 
