@@ -469,10 +469,7 @@ async def get_client_detail(
                 "status": tenant.status,
                 "created_at": tenant.created_at
             },
-            "servers": servers,
-            "sentinel_agents": agents,
-            "decoy_files": decoys,
-            "recent_alerts": alerts
+            "servers": servers
         }
 
     except HTTPException:

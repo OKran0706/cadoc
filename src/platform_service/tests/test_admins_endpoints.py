@@ -445,9 +445,9 @@ async def test_get_client_detail_success():
     data = response.json()
     assert data["tenant"]["slug"] == "client-a"
     assert "servers" in data
-    assert "sentinel_agents" in data
-    assert "decoy_files" in data
-    assert "recent_alerts" in data
+    assert "sentinel_agents" not in data
+    assert "decoy_files" not in data
+    assert "recent_alerts" not in data
     
     # Assert nesting works correctly
     first_srv = data["servers"][0]
