@@ -412,13 +412,30 @@ async def test_get_client_detail_success():
         id="t-uuid-1", slug="client-a", name="Client A",
         status="active", created_at="2026-01-01T00:00:00"
     )
+    srv_row = make_row(
+        id="srv-uuid-1", hostname="srv-test", ip_address="192.168.1.100",
+        os_type="Linux", status="online", created_at="2026-01-01T00:00:00"
+    )
+    agent_row = make_row(
+        id="ag-uuid-1", server_id="srv-uuid-1", status="active",
+        version="v1.5.0", last_seen_at="2026-01-01T00:01:00", created_at="2026-01-01T00:00:00"
+    )
+    decoy_row = make_row(
+        id="decoy-uuid-1", server_id="srv-uuid-1", file_path="/etc/passwd",
+        file_type="honeyfile", status="planted", planted_at="2026-01-01T00:02:00"
+    )
+    alert_row = make_row(
+        id="alt-uuid-1", server_id="srv-uuid-1", file_path="/etc/passwd",
+        alert_type="DECOY_TAMPER", severity="high", triggered_at="2026-01-01T00:03:00",
+        resolved_at=None
+    )
     mock_db.execute.side_effect = [
         perm_ok(),
         row(tenant_row),        # tenant lookup
-        rows(),                 # servers
-        rows(),                 # agents
-        rows(),                 # decoys
-        rows()                  # alerts
+        rows(srv_row),          # servers
+        rows(agent_row),        # agents
+        rows(decoy_row),        # decoys
+        rows(alert_row)         # alerts
     ]
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as ac:
@@ -431,3 +448,10 @@ async def test_get_client_detail_success():
     assert "sentinel_agents" in data
     assert "decoy_files" in data
     assert "recent_alerts" in data
+    
+    # Assert nesting works correctly
+    first_srv = data["servers"][0]
+    assert first_srv["id"] == "srv-uuid-1"
+    assert first_srv["sentinel_agents"][0]["id"] == "ag-uuid-1"
+    assert first_srv["decoy_files"][0]["id"] == "decoy-uuid-1"
+    assert first_srv["recent_alerts"][0]["id"] == "alt-uuid-1"

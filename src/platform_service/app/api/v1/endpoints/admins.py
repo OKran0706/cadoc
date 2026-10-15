@@ -454,6 +454,13 @@ async def get_client_detail(
         """))
         alerts = [dict(r._mapping) for r in alerts_res.fetchall()]
 
+        # Nest the relationships
+        for s in servers:
+            s_id = s["id"]
+            s["sentinel_agents"] = [a for a in agents if a["server_id"] == s_id]
+            s["decoy_files"] = [d for d in decoys if d["server_id"] == s_id]
+            s["recent_alerts"] = [al for al in alerts if al["server_id"] == s_id]
+
         return {
             "tenant": {
                 "id": tenant.id,
