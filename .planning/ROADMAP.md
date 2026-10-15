@@ -173,3 +173,13 @@ Plans:
 
 Plans:
 - [ ] TBD (run /gsd-plan-phase 29 to break down)
+
+### Phase 30: the api endpoints
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 29
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 30 to break down)
