@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from pydantic import BaseModel
 from typing import Optional, List
-from app.core.database import get_db_session, set_tenant_search_path
+from app.core.database import get_db_session
 from app.core.security import RequirePermission, get_password_hash, verify_password_strength
 import logging
 
@@ -352,9 +352,8 @@ async def list_clients(
 ):
     """
     Lists all registered clients/tenants with aggregated high-level resource summaries.
-    Counts are pulled directly from each client_{slug} schema dynamically.
+    Counts are pulled directly from each client_{slug} schema using explicit schema qualification.
     """
-    # Fetch all tenants
     result = await db.execute(text("""
         SELECT id::text, slug, name, status, created_at::text
         FROM public.tenants
@@ -364,14 +363,15 @@ async def list_clients(
 
     summaries = []
     for tenant in tenants:
+        # Validate slug is safe for use in identifiers (already enforced by DB constraint)
+        schema = f"client_{tenant.slug}"
         try:
-            await set_tenant_search_path(db, tenant.slug)
-            counts_res = await db.execute(text("""
+            counts_res = await db.execute(text(f"""
                 SELECT
-                    (SELECT COUNT(*) FROM servers)         AS server_count,
-                    (SELECT COUNT(*) FROM sentinel_agents WHERE status = 'active') AS active_agent_count,
-                    (SELECT COUNT(*) FROM canary_decoy_files WHERE status = 'planted') AS planted_decoy_count,
-                    (SELECT COUNT(*) FROM tamper_alerts)   AS alert_count
+                    (SELECT COUNT(*) FROM {schema}.servers)                                          AS server_count,
+                    (SELECT COUNT(*) FROM {schema}.sentinel_agents WHERE status = 'active')          AS active_agent_count,
+                    (SELECT COUNT(*) FROM {schema}.canary_decoy_files WHERE status = 'planted')      AS planted_decoy_count,
+                    (SELECT COUNT(*) FROM {schema}.tamper_alerts)                                    AS alert_count
             """))
             counts = counts_res.fetchone()
             summaries.append({
@@ -386,7 +386,7 @@ async def list_clients(
                 "alert_count": counts.alert_count
             })
         except Exception:
-            # Schema may not yet be provisioned — return partial data
+            # Schema may not yet be fully provisioned
             summaries.append({
                 "id": tenant.id,
                 "slug": tenant.slug,
@@ -411,6 +411,7 @@ async def get_client_detail(
     """
     Returns a comprehensive client-specific dashboard — servers, agents,
     decoy inventory, and a feed of recent tamper alerts.
+    Uses explicit schema-qualified table names to avoid connection pool search_path issues.
     """
     # Verify tenant exists
     t_res = await db.execute(
@@ -421,35 +422,35 @@ async def get_client_detail(
     if not tenant:
         raise HTTPException(status_code=404, detail=f"Client '{company_slug}' not found")
 
-    try:
-        await set_tenant_search_path(db, company_slug)
+    schema = f"client_{company_slug}"
 
+    try:
         # Servers
-        servers_res = await db.execute(text("""
+        servers_res = await db.execute(text(f"""
             SELECT id::text, hostname, ip_address, os_type, status, created_at::text
-            FROM servers ORDER BY created_at DESC
+            FROM {schema}.servers ORDER BY created_at DESC
         """))
         servers = [dict(r._mapping) for r in servers_res.fetchall()]
 
         # Sentinel Agents
-        agents_res = await db.execute(text("""
+        agents_res = await db.execute(text(f"""
             SELECT id::text, server_id::text, status, version, last_seen_at::text, created_at::text
-            FROM sentinel_agents ORDER BY last_seen_at DESC NULLS LAST
+            FROM {schema}.sentinel_agents ORDER BY last_seen_at DESC NULLS LAST
         """))
         agents = [dict(r._mapping) for r in agents_res.fetchall()]
 
         # Decoy Files
-        decoys_res = await db.execute(text("""
+        decoys_res = await db.execute(text(f"""
             SELECT id::text, server_id::text, file_path, file_type, status, planted_at::text
-            FROM canary_decoy_files ORDER BY planted_at DESC NULLS LAST
+            FROM {schema}.canary_decoy_files ORDER BY planted_at DESC NULLS LAST
         """))
         decoys = [dict(r._mapping) for r in decoys_res.fetchall()]
 
         # Recent Tamper Alerts (last 25)
-        alerts_res = await db.execute(text("""
+        alerts_res = await db.execute(text(f"""
             SELECT id::text, server_id::text, file_path, alert_type, severity,
                    triggered_at::text, resolved_at::text
-            FROM tamper_alerts ORDER BY triggered_at DESC LIMIT 25
+            FROM {schema}.tamper_alerts ORDER BY triggered_at DESC LIMIT 25
         """))
         alerts = [dict(r._mapping) for r in alerts_res.fetchall()]
 

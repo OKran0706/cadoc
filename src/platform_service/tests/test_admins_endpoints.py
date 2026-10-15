@@ -377,8 +377,7 @@ async def test_list_clients():
     mock_db.execute.side_effect = [
         perm_ok(),
         rows(tenant_row),       # tenant list
-        schema_switch(),        # set_tenant_search_path
-        row(counts_row)         # aggregate counts
+        row(counts_row)         # aggregate counts (schema-qualified, no search_path call)
     ]
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as ac:
@@ -416,7 +415,6 @@ async def test_get_client_detail_success():
     mock_db.execute.side_effect = [
         perm_ok(),
         row(tenant_row),        # tenant lookup
-        schema_switch(),        # set_tenant_search_path
         rows(),                 # servers
         rows(),                 # agents
         rows(),                 # decoys
