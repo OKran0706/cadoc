@@ -34,27 +34,48 @@ fi
 mkdir -p deploy/certs deploy/scripts
 chmod +x deploy/scripts/vault-init.sh 2>/dev/null || true
 
-# Self-signed Nginx TLS certs
-if [ ! -f "deploy/certs/selfsigned.crt" ] || [ ! -f "deploy/certs/selfsigned.key" ]; then
-    echo "[+] Generating initial self-signed SSL certificates for Nginx..."
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-        -keyout deploy/certs/selfsigned.key \
-        -out deploy/certs/selfsigned.crt \
-        -subj "/C=US/ST=State/L=City/O=Cadoc/CN=cadoc.local"
-    chmod 600 deploy/certs/selfsigned.key
-    chmod 644 deploy/certs/selfsigned.crt
-fi
+# Public identity of this server (agents connect here on 443 only)
+PUBLIC_HOST="${PUBLIC_HOST:-ec2-3-89-18-5.compute-1.amazonaws.com}"
+PUBLIC_IP="${PUBLIC_IP:-3.89.18.5}"
 
-# CA certificate for Canary PKI & mTLS
+# CA certificate for Canary PKI & mTLS (also signs the nginx server cert below)
 if [ ! -f "deploy/certs/ca.crt" ] || [ ! -f "deploy/certs/ca.key" ]; then
     echo "[+] Generating Root CA certificate for Canary PKI & mTLS..."
     openssl req -new -x509 -days 3650 -nodes \
         -keyout deploy/certs/ca.key \
         -out deploy/certs/ca.crt \
-        -subj "/CN=Canary CA/O=Cadoc"
+        -subj "/CN=Canary CA/O=Cadoc" \
+        -addext "basicConstraints=critical,CA:TRUE" \
+        -addext "keyUsage=critical,keyCertSign,cRLSign"
     chmod 600 deploy/certs/ca.key
     chmod 644 deploy/certs/ca.crt
 fi
+
+# Nginx server cert signed by the Canary CA with a SAN for the public host/IP.
+# Agents trust only this CA (Vault issuing_ca), and Go requires a SAN match.
+# Regenerated if missing, SAN-less (old self-signed cadoc.local), or host changed.
+if [ ! -f "deploy/certs/selfsigned.crt" ] || [ ! -f "deploy/certs/selfsigned.key" ] \
+   || ! openssl x509 -in deploy/certs/selfsigned.crt -noout -ext subjectAltName 2>/dev/null | grep -q "$PUBLIC_HOST"; then
+    echo "[+] Generating CA-signed server certificate for ${PUBLIC_HOST} / ${PUBLIC_IP}..."
+    openssl req -new -nodes -newkey rsa:2048 \
+        -keyout deploy/certs/selfsigned.key \
+        -out deploy/certs/server.csr \
+        -subj "/O=Cadoc/CN=${PUBLIC_HOST}"
+    printf 'subjectAltName=DNS:%s,IP:%s\nextendedKeyUsage=serverAuth\nbasicConstraints=CA:FALSE\n' \
+        "$PUBLIC_HOST" "$PUBLIC_IP" > deploy/certs/server.ext
+    openssl x509 -req -in deploy/certs/server.csr \
+        -CA deploy/certs/ca.crt -CAkey deploy/certs/ca.key -CAcreateserial \
+        -days 825 -extfile deploy/certs/server.ext \
+        -out deploy/certs/selfsigned.crt
+    rm -f deploy/certs/server.csr deploy/certs/server.ext
+    chmod 600 deploy/certs/selfsigned.key
+    chmod 644 deploy/certs/selfsigned.crt
+fi
+
+# Build the downloads dir nginx serves (installer + CA); binaries come from scripts/build-release.sh
+mkdir -p deploy/downloads
+cp -f deploy/certs/ca.crt deploy/downloads/ca.crt
+[ -f scripts/install-sentinel.sh ] && cp -f scripts/install-sentinel.sh deploy/downloads/install-sentinel.sh
 
 # 3. Check for .env file
 if [ ! -f ".env" ]; then
@@ -74,6 +95,9 @@ if [ ! -f ".env" ]; then
     echo "[+] Created new .env with secure database, JWT, and Vault credentials!"
 fi
 
+# Ensure PUBLIC_BASE_URL is set (used in the UI install command)
+grep -q "^PUBLIC_BASE_URL=" .env || echo "PUBLIC_BASE_URL=https://${PUBLIC_HOST}" >> .env
+
 # 4. Pull and build containers
 echo "[+] Starting Cadoc services with docker compose..."
 docker compose -f docker-compose.ec2.yml up -d --build
@@ -89,8 +113,9 @@ echo "  - Postgres:         127.0.0.1:5432"
 echo "  - Redis:            127.0.0.1:6379"
 echo "  - Redpanda:         127.0.0.1:9092"
 echo "  - Vault (Dev):      127.0.0.1:8200"
-echo "  - Platform UI/API:  https://<HOST>:443/"
-echo "  - Ingestion (mTLS): https://<HOST>:8443/"
+echo "  - Platform UI/API:  https://${PUBLIC_HOST}/"
+echo "  - Sentinel ingest:  https://${PUBLIC_HOST}/ingest (same port 443, mTLS by path)"
+echo "  - Agent installer:  https://${PUBLIC_HOST}/install.sh"
 echo "------------------------------------------"
 echo " Initial Admin Login Credentials:"
 echo " Email:    ${ADMIN_EMAIL}"

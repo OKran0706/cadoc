@@ -5,6 +5,7 @@ from pydantic import BaseModel
 import logging
 from app.core.database import get_db_session, set_tenant_search_path
 from app.core.security import verify_user_jwt, mint_sentinel_join_token
+from app.core.install import build_install_command, ca_sha256
 
 logger = logging.getLogger("platform.bootstrap")
 router = APIRouter()
@@ -36,11 +37,18 @@ async def brokered_join(req: JoinRequest, db: AsyncSession = Depends(get_db_sess
             raise HTTPException(status_code=404, detail=f"Server ID {req.server_id} not registered for client {company_slug}")
         
         # Mint token
-        client_id = f"sentinel-agent-{company_slug}"
-        token = mint_sentinel_join_token(client_id, req.server_id)
-        
+        # client_id = {company_slug}.{sentinel_id}: the format ingestion's renewal path splits on.
+        client_id = f"{company_slug}.{req.server_id}"
+        token = mint_sentinel_join_token(company_slug, req.server_id)
+
         logger.info(f"Brokered Join Token minted: server_id={req.server_id} for client={company_slug}")
-        return {"status": "success", "join_token": token, "client_id": client_id}
+        return {
+            "status": "success",
+            "join_token": token,
+            "client_id": client_id,
+            "install_command": build_install_command(token, client_id),
+            "ca_sha256": ca_sha256(),
+        }
     
     except HTTPException:
         raise

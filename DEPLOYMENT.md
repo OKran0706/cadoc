@@ -420,3 +420,42 @@ All secrets are stored in HashiCorp Vault KV v2. Sentinel fetches them at runtim
 | `Kafka unreachable — failing closed` | Kafka not ready or wrong broker address | Check Kafka health, verify broker hostnames |
 | `SELFMON_MODE_SELECTED: proc-fallback` in prod | Tetragon not installed or not running | Install Tetragon and restart Sentinel |
 | `permission denied` on Vault read | Sentinel token lacks policy | Attach `sentinel-policy` to the token |
+
+---
+
+## 4. AWS EC2 + Real-Server Agent Enrollment (single port 443)
+
+Backend: `docker-compose.ec2.yml`. Public host `ec2-3-89-18-5.compute-1.amazonaws.com` (`3.89.18.5`).
+Only **80/443** are exposed; nginx routes by path:
+
+| Path | Backend | Auth |
+|------|---------|------|
+| `/`, `/api/*` | platform-service | user JWT |
+| `/install.sh`, `/downloads/*` | static (`deploy/downloads`) | public |
+| `/bootstrap/get_credentials` | ingestion | one-time join token |
+| `/bootstrap/renew_credentials` | ingestion | ratcheting renewal token |
+| `/ingest`, `/control/killswitch`, `/bootstrap/maintenance_key` | ingestion | **mTLS client cert required** |
+
+Ingestion's own `/bootstrap/join` is not routed; join tokens come from `POST /api/v1/dashboard/servers/token`
+(or `/api/v1/bootstrap/join`) after JWT + tenant checks.
+
+### Deploy
+1. AWS: security group allows inbound 80/443 only (close 8443); attach an Elastic IP so host/IP stay stable.
+2. Build artifacts locally: `bash scripts/build-release.sh` (outputs `deploy/downloads/`).
+3. `scripts/transfer-to-ec2.ps1 <host>` then on the box `sudo bash deploy/ec2-setup.sh`.
+   `ec2-setup.sh` creates the Canary CA, a CA-signed nginx cert with SAN for the host/IP, and sets `PUBLIC_BASE_URL`.
+   Override with `PUBLIC_HOST` / `PUBLIC_IP` env vars if the address changes (delete `deploy/certs/selfsigned.*` to re-issue).
+
+### Enroll a server
+UI calls `POST /api/v1/dashboard/servers/token {server_id}`; response `install_command` looks like:
+```
+curl -fsSLk https://<host>/install.sh | sudo bash -s -- --token <jwt> --server https://<host> --client-id <slug>.<server-id> --ca-sha256 <hex>
+```
+The installer pins the CA by SHA-256, downloads and verifies the binary, writes config, starts the service, waits for
+`/var/lib/canary/mtls.crt`, then deletes the one-time token. Token TTL is 15 minutes, single use.
+`POST /api/v1/dashboard/servers/verify` reports `verified: true` once the first heartbeat arrives.
+
+### Known limits
+- Vault runs in dev mode (in-memory): restarting the vault container invalidates all enrolled agents.
+- Browser shows a certificate warning (private CA) until a publicly trusted cert is used for the UI.
+- The installer does not pass `-deployer-profile`, so decoy deployment is off until a profile is configured.

@@ -32,14 +32,14 @@ def test_password_strength():
         verify_password_strength("Short1!")
 
 def test_mint_sentinel_join_token():
-    client_id = "test-client"
+    company_slug = "test-client"
     server_id = "test-server"
-    token = mint_sentinel_join_token(client_id, server_id)
+    token = mint_sentinel_join_token(company_slug, server_id)
     
     payload = jwt.decode(token, settings.BOOTSTRAP_JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
     assert payload["sub"] == "sentinel-bootstrap"
-    assert payload["client_id"] == client_id
-    assert payload["server_id"] == server_id
+    assert payload["company_slug"] == company_slug
+    assert payload["sentinel_id"] == server_id
     assert "jti" in payload
     assert payload["exp"] > payload["iat"]
 
@@ -326,3 +326,17 @@ async def test_tenant_teardown_cleanup():
     assert str(call_sql.text) == f"DROP SCHEMA {schema_name} CASCADE"
     db.commit.assert_called_once()
 
+
+
+def test_build_install_command(tmp_path, monkeypatch):
+    from app.core import install
+    ca = tmp_path / "ca.crt"
+    import subprocess
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(tmp_path / "k"),
+                    "-out", str(ca), "-subj", "/CN=t", "-days", "1"], check=True, capture_output=True)
+    monkeypatch.setattr(install.settings, "CA_CERT_PATH", str(ca))
+    monkeypatch.setattr(install.settings, "PUBLIC_BASE_URL", "https://h.example/")
+    cmd = install.build_install_command("tok", "acme.srv-1")
+    assert cmd.startswith("curl -fsSLk https://h.example/install.sh | sudo bash -s -- ")
+    assert "--token tok --server https://h.example --client-id acme.srv-1 --ca-sha256 " in cmd
+    assert len(install.ca_sha256()) == 64

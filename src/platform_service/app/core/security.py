@@ -73,17 +73,18 @@ def verify_user_jwt(credentials: HTTPAuthorizationCredentials = Security(securit
     except jwt.InvalidTokenError as exc:
         raise HTTPException(status_code=401, detail=f"Invalid user administrative token: {exc}")
 
-def mint_sentinel_join_token(client_id: str, server_id: str) -> str:
+def mint_sentinel_join_token(company_slug: str, server_id: str) -> str:
     """
     Generates a signed one-time-use Join Token for a Sentinel agent.
-    Signs the payload with BOOTSTRAP_JWT_SECRET.
+    Signs the payload with BOOTSTRAP_JWT_SECRET. Claims match the ingestion
+    service's decode_join_token (company_slug, sentinel_id, jti).
     """
     import uuid
     now = int(time.time())
     payload = {
         "sub": "sentinel-bootstrap",
-        "client_id": client_id,
-        "server_id": server_id,
+        "company_slug": company_slug,
+        "sentinel_id": server_id,
         "jti": str(uuid.uuid4()),
         "iat": now,
         "exp": now + 900  # 15 minutes TTL

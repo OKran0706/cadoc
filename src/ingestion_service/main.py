@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from aiokafka import AIOKafkaProducer
 
 from crypto import verify_signature, verify_timestamp
-from liveness import LivenessManager
+from liveness import LivenessManager, parse_agent_cn
 from bootstrap import (
     BootstrapJoinRequest,
     verify_user_jwt,
@@ -131,6 +131,14 @@ async def handle_ingest(
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
+    # An agent may only speak as itself: a claimed payload id must equal the identity
+    # nginx verified from the client cert ({slug}.{sentinel_id}). Events without an id are unaffected.
+    claimed_id = payload_data.get("id")
+    cert_id = _extract_client_id(request)
+    if claimed_id is not None and claimed_id != cert_id:
+        logger.warning(f"IDENTITY_MISMATCH: payload id={claimed_id!r} cert={cert_id!r}")
+        raise HTTPException(status_code=403, detail="Payload identity does not match client certificate")
+
     sentinel_id = payload_data.get("id", envelope.key_id)
     sentinel_ts = payload_data.get("ts")
     event_type = payload_data.get("type", "UNKNOWN")
@@ -141,6 +149,9 @@ async def handle_ingest(
         raise HTTPException(status_code=403, detail="Timestamp out of window")
 
     # Signature verification (Unified trust anchor per D-17)
+    # ponytail: signatures are NOT verified unless ORG_PUBLIC_KEY is set, and agents sign with
+    # per-agent broker-issued keys, so a single org key can't verify them. Upgrade path: store each
+    # agent's public key in Vault at enrollment/renewal and verify against {slug}.{id}'s key (current+previous).
     if ORG_PUBLIC_KEY:
         if not verify_signature(ORG_PUBLIC_KEY, envelope.signature, envelope.payload):
             logger.warning(f"BAD_SIGNATURE: Invalid signature for {sentinel_id}")
@@ -150,13 +161,12 @@ async def handle_ingest(
     if event_type == "SENTINEL_HEARTBEAT":
         # Cryptographic CN-based tenant and identity extraction (No fallbacks!)
         client_cn = _extract_client_id(request)
-        match = re.match(r"^agent:([^:]+):([^:]+)$", client_cn)
-        if not match:
-            logger.error(f"CERTIFICATE_CN_MALFORMED: Expected agent:{{slug}}:{{id}}, got CN={client_cn}")
+        identity = parse_agent_cn(client_cn)
+        if not identity:
+            logger.error(f"CERTIFICATE_CN_MALFORMED: Expected {{slug}}.{{id}}, got CN={client_cn}")
             raise HTTPException(status_code=403, detail="Bad credentials — invalid certificate format")
-        
-        company_slug = match.group(1)
-        resolved_sentinel_id = match.group(2)
+
+        company_slug, resolved_sentinel_id = identity
 
         import uuid
         try:

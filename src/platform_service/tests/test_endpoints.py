@@ -120,7 +120,8 @@ async def test_brokered_join_success():
     assert response.status_code == 200
     assert response.json()["status"] == "success"
     assert "join_token" in response.json()
-    assert response.json()["client_id"] == "sentinel-agent-client-a"
+    assert response.json()["client_id"] == "client-a.server-1234"
+    assert "install_command" in response.json()
 
 @pytest.mark.asyncio
 async def test_dashboard_alerts_without_cursor():

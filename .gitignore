@@ -28,3 +28,6 @@ venv/
 *.pem
 *.tar.gz
 cadoc-deploy.tar.gz
+# Sentinel release artifacts (built by scripts/build-release.sh)
+deploy/downloads/
+deploy/certs/

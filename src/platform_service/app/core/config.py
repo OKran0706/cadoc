@@ -36,6 +36,16 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("INITIAL_ADMIN_PASSWORD")
     )
 
+    # Public origin agents use for download, bootstrap and ingest (single port 443).
+    PUBLIC_BASE_URL: str = Field(
+        "https://ec2-3-89-18-5.compute-1.amazonaws.com",
+        validation_alias=AliasChoices("PUBLIC_BASE_URL")
+    )
+    CA_CERT_PATH: str = Field(
+        "/certs/ca.crt",
+        validation_alias=AliasChoices("CA_CERT_PATH")
+    )
+
     class Config:
         case_sensitive = True
 

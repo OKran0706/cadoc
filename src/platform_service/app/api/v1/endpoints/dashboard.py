@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from app.core.config import settings
 from app.core.database import get_db_session, set_tenant_search_path
 from app.core.security import verify_user_jwt, RequirePermission, mint_sentinel_join_token
+from app.core.install import build_install_command
 import time
 import csv
 import io
@@ -526,11 +527,24 @@ async def generate_join_token(
     if not server:
         raise HTTPException(status_code=404, detail=f"Server '{payload.server_id}' not found")
         
-    client_id = f"sentinel-agent-{company_slug}"
-    join_token = mint_sentinel_join_token(client_id, str(server.id))
+    server_id = str(server.id)
+    client_id = f"{company_slug}.{server_id}"
+    join_token = mint_sentinel_join_token(company_slug, server_id)
     expires_at = int(time.time()) + 900
-    install_cmd = f"curl -sSL https://cadoc.io/install.sh | bash -s -- --token {join_token}"
-    
+    install_cmd = build_install_command(join_token, client_id)
+
+    # Pre-register the agent row (id == server id == sentinel_id) so the liveness
+    # listener and /servers/verify have a row to flip to 'active' on first heartbeat.
+    await db.execute(
+        text(f"""
+            INSERT INTO "client_{company_slug}".sentinel_agents (id, server_id, version, git_commit, status)
+            VALUES (CAST(:sid AS uuid), CAST(:sid AS uuid), 'pending', 'pending', 'offline')
+            ON CONFLICT (id) DO NOTHING
+        """),
+        {"sid": server_id},
+    )
+    await db.commit()
+
     return JoinResponse(
         token=join_token,
         expires_at=expires_at,

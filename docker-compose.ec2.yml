@@ -23,7 +23,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: ["redis-server", "--notify-keyspace-events", "Ex"]
+    command: ["redis-server", "--notify-keyspace-events", "E$$x"]
     ports:
       - "127.0.0.1:6379:6379"
     healthcheck:
@@ -122,6 +122,10 @@ services:
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:?Admin Password required}
       ENABLE_RATE_LIMIT: "true"
       PROJECT_NAME: "Cadoc Platform (AWS EC2)"
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://ec2-3-89-18-5.compute-1.amazonaws.com}
+      CA_CERT_PATH: /certs/ca.crt
+    volumes:
+      - ./deploy/certs:/certs:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -158,10 +162,10 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "8443:8443"
     volumes:
       - ./deploy/nginx/ec2.conf:/etc/nginx/conf.d/default.conf:ro
       - ./deploy/certs:/etc/nginx/certs:ro
+      - ./deploy/downloads:/usr/share/nginx/downloads:ro
     depends_on:
       - platform-service
       - ingestion-service

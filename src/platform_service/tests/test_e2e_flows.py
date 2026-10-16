@@ -235,7 +235,7 @@ async def test_flow_tenant_lifecycle_happy_path(monkeypatch):
     ]
 
     monkeypatch.setattr("app.api.v1.endpoints.bootstrap.mint_sentinel_join_token",
-                        lambda client_id, server_id: "test-join-token-xyz")
+                        lambda company_slug, server_id: "test-join-token-xyz")
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/api/v1/bootstrap/join", json={"server_id": "srv-uuid-1"})
@@ -243,7 +243,7 @@ async def test_flow_tenant_lifecycle_happy_path(monkeypatch):
     assert resp.status_code == 200, f"Bootstrap join failed: {resp.text}"
     join_data = resp.json()
     assert join_data["join_token"] == "test-join-token-xyz"
-    assert "sentinel-agent-client-a" in join_data["client_id"]
+    assert join_data["client_id"] == "client-a.srv-uuid-1"
 
     # Step 4 – List Agents (empty)
     mock_db.reset_mock()
