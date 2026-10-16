@@ -183,3 +183,13 @@ Plans:
 
 Plans:
 - [ ] TBD (run /gsd-plan-phase 30 to break down)
+
+### Phase 31: Implement multi-tenant auth updates (consolidate public/tenant schemas)
+
+**Goal:** Consolidate platform auth tables into global admins and tenant-isolated users/roles/keys.
+**Requirements**: TBD
+**Depends on:** Phase 30
+**Plans:** 0/1 plans complete
+
+Plans:
+- [ ] 31-01: Federated Multi-Tenant Auth Schema Consolidation

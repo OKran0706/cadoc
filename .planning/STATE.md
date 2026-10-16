@@ -35,11 +35,13 @@ Last activity: 2026-05-21 -- Phase 29 marked complete
 - Phase 28 complete: Fetch system metrics in heartbeat (real-time telemetry).
 - Phase 29 complete: Create administrative control plane
 - Phase 30 added: the api endpoints
+- Phase 31 added: Implement multi-tenant auth updates (consolidate public/tenant schemas)
 
 ## Progress
 
 | Phase                    | Milestone | Plans | Status   | Completed  |
 | ------------------------ | --------- | ----- | -------- | ---------- |
+| 31. Multi-Tenant Auth    | v1.6      | 0/1   | Pending  | -          |
 | 30. The API Endpoints    | v1.6      | 0/1   | Pending  | -          |
 | 29. Admin Control Plane  | v1.6      | 1/1   | Complete | 2026-05-21 |
 | 28. System Metrics in HB | v1.6      | 1/1   | Complete | 2026-05-18 |
