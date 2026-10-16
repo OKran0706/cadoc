@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from pydantic import BaseModel
 from typing import Optional, List
+import json
 import re
 from app.core.database import get_db_session, set_tenant_search_path
 from app.core.security import RequirePermission
@@ -50,26 +51,27 @@ async def create_server(
     await set_tenant_search_path(db, target_slug)
 
     try:
-        # Check if project exists
+        # Check if project exists (supports UUID or project name)
         proj_res = await db.execute(
-            text(f"SELECT id FROM \"client_{target_slug}\".projects WHERE id = :project_id"),
+            text(f"SELECT id FROM \"client_{target_slug}\".projects WHERE id::text = :project_id OR name = :project_id LIMIT 1"),
             {"project_id": req.project_id}
         )
-        if not proj_res.fetchone():
+        proj_row = proj_res.fetchone()
+        if not proj_row:
             raise HTTPException(status_code=404, detail="Project not found")
 
         result = await db.execute(
             text(f"""
                 INSERT INTO "client_{target_slug}".servers (project_id, hostname, ip_address, status, specs)
-                VALUES (:project_id, :hostname, :ip_address::inet, :status, :specs)
+                VALUES (:project_id, :hostname, CAST(:ip_address AS inet), :status, CAST(:specs AS jsonb))
                 RETURNING id::text, project_id::text, hostname, ip_address::text, status, specs, created_at::text, updated_at::text
             """),
             {
-                "project_id": req.project_id,
+                "project_id": proj_row.id,
                 "hostname": req.hostname,
                 "ip_address": req.ip_address,
                 "status": req.status,
-                "specs": req.specs
+                "specs": json.dumps(req.specs or {})
             }
         )
         row = result.fetchone()

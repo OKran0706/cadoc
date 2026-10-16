@@ -81,9 +81,9 @@ WHERE slug = :'tenant_slug';
 
 INSERT INTO roles (name, permissions)
 VALUES
-    ('tenant-admin',   '["project.manage", "server.manage", "security.read", "security.respond", "project.read", "server.read"]'::jsonb),
-    ('security-analyst', '["security.read", "security.respond", "server.read", "project.read"]'::jsonb),
-    ('read-only',      '["project.read", "server.read", "security.read"]'::jsonb)
+    ('tenant-admin',   '["project.manage", "server.manage", "security.read", "security.respond", "project.read", "server.read", "cmdb.write", "cmdb.read", "admin.manage"]'::jsonb),
+    ('security-analyst', '["security.read", "security.respond", "server.read", "project.read", "cmdb.read"]'::jsonb),
+    ('read-only',      '["project.read", "server.read", "security.read", "cmdb.read"]'::jsonb)
 ON CONFLICT (name) DO UPDATE
 SET permissions = EXCLUDED.permissions;
 

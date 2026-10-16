@@ -345,7 +345,7 @@ BEGIN
             specs JSONB NOT NULL DEFAULT '{}'::jsonb,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            CONSTRAINT servers_status_chk CHECK (status IN ('online', 'offline', 'maintenance'))
+            CONSTRAINT servers_status_chk CHECK (status IN ('online', 'offline', 'maintenance', 'provisioning', 'pending'))
         )
     $ddl$, v_schema_name, v_schema_name);
 
