@@ -365,7 +365,7 @@ async def list_nodes_inventory(
             s.id as server_id,
             s.hostname,
             s.ip_address::text as ip,
-            s.location,
+            COALESCE(s.specs->>'location', 'Unknown') as location,
             a.status as agent_status,
             (
                 SELECT COUNT(*) 
@@ -451,7 +451,7 @@ async def get_detections_heatmap(
         SELECT 
             s.id as server_id,
             s.hostname,
-            s.location,
+            COALESCE(s.specs->>'location', 'Unknown') as location,
             p.name as project_name,
             (
                 SELECT COUNT(*) 
@@ -461,7 +461,7 @@ async def get_detections_heatmap(
             ) as threats
         FROM "client_{company_slug}".servers s
         JOIN "client_{company_slug}".projects p ON p.id = s.project_id
-        ORDER BY s.location ASC, p.name ASC, s.hostname ASC
+        ORDER BY COALESCE(s.specs->>'location', 'Unknown') ASC, p.name ASC, s.hostname ASC
     """
     res = await db.execute(text(sql))
     servers = res.fetchall()
@@ -590,7 +590,7 @@ async def export_telemetry_csv(
             s.id as server_id,
             s.hostname,
             s.ip_address::text as ip,
-            s.location,
+            COALESCE(s.specs->>'location', 'Unknown') as location,
             s.status as server_status,
             (
                 SELECT COUNT(*) 

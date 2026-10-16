@@ -149,21 +149,21 @@ FROM (
             'mock-pay-web-01.internal',
             '10.42.10.11',
             'online',
-            '{"cpu": "8 vCPU", "ram_gb": 32, "os": "Ubuntu 22.04", "disk": "250GB gp3"}'
+            '{"cpu": "8 vCPU", "ram_gb": 32, "os": "Ubuntu 22.04", "disk": "250GB gp3", "location": "us-east-1"}'
         ),
         (
             'Mock Payments Platform',
             'mock-pay-db-01.internal',
             '10.42.10.21',
             'maintenance',
-            '{"cpu": "16 vCPU", "ram_gb": 64, "os": "Ubuntu 22.04", "disk": "1TB io2"}'
+            '{"cpu": "16 vCPU", "ram_gb": 64, "os": "Ubuntu 22.04", "disk": "1TB io2", "location": "us-east-1"}'
         ),
         (
             'Mock Internal Operations',
             'mock-ops-worker-01.internal',
             '10.42.20.31',
             'offline',
-            '{"cpu": "4 vCPU", "ram_gb": 16, "os": "Debian 12", "disk": "120GB gp3"}'
+            '{"cpu": "4 vCPU", "ram_gb": 16, "os": "Debian 12", "disk": "120GB gp3", "location": "eu-central-1"}'
         )
 ) AS seed(project_name, hostname, ip_address, status, specs)
 JOIN project_rows ON project_rows.name = seed.project_name
