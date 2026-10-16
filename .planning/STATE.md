@@ -6,11 +6,11 @@ status: completed
 last_updated: "2026-06-11T17:57:38Z"
 last_activity: 2026-06-11 -- Phase 32 marked complete
 progress:
-  total_phases: 7
+  total_phases: 8
   completed_phases: 4
   total_plans: 8
   completed_plans: 5
-  percent: 62.5
+  percent: 50.0
 ---
 
 ## Current Position
@@ -37,12 +37,14 @@ Last activity: 2026-06-11 -- Phase 32 marked complete
 - Phase 30 added: the api endpoints
 - Phase 31 complete: Implement multi-tenant auth updates (consolidate public/tenant schemas)
 - Phase 32 complete: fixing broken apis
+- Phase 33 added: Flow Testing and Missing APIs for Platform Service
 
 
 ## Progress
 
 | Phase                    | Milestone | Plans | Status   | Completed  |
 | ------------------------ | --------- | ----- | -------- | ---------- |
+| 33. Flow Testing & APIs  | v1.6      | 0/1   | Pending  | -          |
 | 32. Fixing Broken APIs   | v1.6      | 1/1   | Complete | 2026-06-11 |
 | 31. Multi-Tenant Auth    | v1.6      | 1/1   | Complete | 2026-06-11 |
 | 30. The API Endpoints    | v1.6      | 0/1   | Pending  | -          |

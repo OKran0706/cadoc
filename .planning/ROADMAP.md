@@ -203,3 +203,13 @@ Plans:
 
 Plans:
 - [x] 32-01: Refactoring Broken APIs for Consolidated Auth Schema (completed 2026-06-11)
+
+### Phase 33: Flow Testing and Missing APIs for Platform Service
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 32
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 33 to break down)
