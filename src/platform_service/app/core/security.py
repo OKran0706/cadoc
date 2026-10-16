@@ -162,6 +162,8 @@ class RequirePermission:
         # 3. Resolve Tenant UUID
         tenant_id = None
         if company_slug != "global":
+            if not re.match(r"^[a-zA-Z0-9_-]+$", company_slug):
+                raise HTTPException(status_code=400, detail="Invalid tenant identifier")
             t_res = await db.execute(
                 text("SELECT id FROM public.tenants WHERE slug = :slug AND status = 'active'"),
                 {"slug": company_slug}
@@ -192,11 +194,11 @@ class RequirePermission:
             has_perm = admin_res.fetchone() is not None
         else:
             perm_res = await db.execute(
-                text("""
+                text(f"""
                     SELECT EXISTS (
                         SELECT 1 
-                        FROM user_roles ur
-                        JOIN roles r ON r.id = ur.role_id
+                        FROM "client_{company_slug}".user_roles ur
+                        JOIN "client_{company_slug}".roles r ON r.id = ur.role_id
                         WHERE ur.user_id = :user_id
                           AND r.permissions ? :code
                     )

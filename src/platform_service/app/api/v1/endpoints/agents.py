@@ -1,12 +1,25 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
+from pydantic import BaseModel
+from typing import Optional, List
 import redis.asyncio as redis
 import json
 import re
 from app.core.config import settings
 from app.core.database import get_db_session, set_tenant_search_path
 from app.core.security import RequirePermission
+
+class AgentResponse(BaseModel):
+    id: str
+    server_id: str
+    version: str
+    git_commit: str
+    status: str
+    capabilities_proof: dict
+    last_connected_at: Optional[str] = None
+    created_at: str
+    updated_at: str
 
 router = APIRouter()
 
@@ -143,3 +156,46 @@ async def recommission_agent(
     except Exception as exc:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to recommission agent: {exc}")
+
+@router.get("/", response_model=List[AgentResponse])
+async def list_agents(
+    db: AsyncSession = Depends(get_db_session),
+    admin: dict = Depends(RequirePermission("security.read"))
+):
+    """
+    Lists all sentinel agents for the authenticated tenant.
+    """
+    company_slug = admin["company_slug"]
+    if company_slug == "global":
+        raise HTTPException(status_code=400, detail="Scope mismatch: Endpoint requires tenant authorization context")
+        
+    if not re.match(r"^[a-zA-Z0-9_-]+$", company_slug):
+        raise HTTPException(status_code=400, detail="Invalid tenant identifier")
+
+    await set_tenant_search_path(db, company_slug)
+
+    try:
+        result = await db.execute(
+            text(f"""
+                SELECT id::text, server_id::text, version, git_commit, status, capabilities_proof,
+                       last_connected_at::text, created_at::text, updated_at::text
+                FROM "client_{company_slug}".sentinel_agents
+                ORDER BY created_at DESC
+            """)
+        )
+        rows = result.fetchall()
+        return [
+            AgentResponse(
+                id=row.id,
+                server_id=row.server_id,
+                version=row.version,
+                git_commit=row.git_commit,
+                status=row.status,
+                capabilities_proof=row.capabilities_proof or {},
+                last_connected_at=row.last_connected_at,
+                created_at=row.created_at,
+                updated_at=row.updated_at
+            ) for row in rows
+        ]
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to query sentinel agents: {exc}")

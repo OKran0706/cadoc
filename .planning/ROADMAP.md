@@ -206,10 +206,10 @@ Plans:
 
 ### Phase 33: Flow Testing and Missing APIs for Platform Service
 
-**Goal:** [To be planned]
+**Goal:** Implement missing Projects, Servers, and Agent Listing APIs in the Platform Service, and create automated pytest flow tests and a live staging verification script to test E2E platform flows and schema-isolated tenant security.
 **Requirements**: TBD
 **Depends on:** Phase 32
-**Plans:** 0 plans
+**Plans:** 1 plan
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 33 to break down)
+- [ ] 33-01: Flow Testing and Missing APIs for Platform Service
