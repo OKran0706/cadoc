@@ -74,12 +74,58 @@ SELECT
 FROM public.tenants
 WHERE slug = :'tenant_slug';
 
+-- ---------------------------------------------------------------------------
+-- RBAC: Roles (permission-based, used by users in this tenant's schema)
+-- These are authorization roles, not infrastructure server tags.
+-- ---------------------------------------------------------------------------
+
+INSERT INTO roles (name, permissions)
+VALUES
+    ('tenant-admin',   '["project.manage", "server.manage", "security.read", "security.respond", "project.read", "server.read"]'::jsonb),
+    ('security-analyst', '["security.read", "security.respond", "server.read", "project.read"]'::jsonb),
+    ('read-only',      '["project.read", "server.read", "security.read"]'::jsonb)
+ON CONFLICT (name) DO UPDATE
+SET permissions = EXCLUDED.permissions;
+
+-- ---------------------------------------------------------------------------
+-- Users (local tenant users, hashed with bcrypt placeholder)
+-- ---------------------------------------------------------------------------
+-- NOTE: password_hash below is a bcrypt hash of "MockPass123!!" for dev only.
+-- Replace with a real hash via the admin API before any staging use.
+
+INSERT INTO users (email, display_name, password_hash)
+VALUES
+    ('alice@mock-acme.example', 'Alice Admin',    '$2b$12$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'),
+    ('bob@mock-acme.example',   'Bob Analyst',    '$2b$12$BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'),
+    ('carol@mock-acme.example', 'Carol Readonly', '$2b$12$CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC')
+ON CONFLICT (email) DO UPDATE
+SET display_name = EXCLUDED.display_name;
+
+-- Assign roles to users
+INSERT INTO user_roles (user_id, role_id)
+SELECT u.id, r.id
+FROM users u
+JOIN roles r ON (
+    (u.email = 'alice@mock-acme.example' AND r.name = 'tenant-admin')
+    OR (u.email = 'bob@mock-acme.example'   AND r.name = 'security-analyst')
+    OR (u.email = 'carol@mock-acme.example' AND r.name = 'read-only')
+)
+ON CONFLICT (user_id, role_id) DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- Projects
+-- ---------------------------------------------------------------------------
+
 INSERT INTO projects (name, description)
 VALUES
-    ('Mock Payments Platform', 'Mock project for payment-facing infrastructure.'),
+    ('Mock Payments Platform',   'Mock project for payment-facing infrastructure.'),
     ('Mock Internal Operations', 'Mock project for back-office systems.')
 ON CONFLICT (name) DO UPDATE
 SET description = EXCLUDED.description;
+
+-- ---------------------------------------------------------------------------
+-- Servers (linked to projects)
+-- ---------------------------------------------------------------------------
 
 WITH project_rows AS (
     SELECT id, name
@@ -122,26 +168,12 @@ ON CONFLICT (hostname) DO UPDATE
 SET
     project_id = EXCLUDED.project_id,
     ip_address = EXCLUDED.ip_address,
-    status = EXCLUDED.status,
-    specs = EXCLUDED.specs;
+    status     = EXCLUDED.status,
+    specs      = EXCLUDED.specs;
 
-INSERT INTO roles (name, permissions)
-VALUES
-    ('web-server', '{"ports": [80, 443], "can_deploy": true}'::jsonb),
-    ('database', '{"backup_required": true, "pii_access": true}'::jsonb),
-    ('worker', '{"queue_access": ["tamper-events", "heartbeats"]}'::jsonb)
-ON CONFLICT (name) DO UPDATE
-SET permissions = EXCLUDED.permissions;
-
-INSERT INTO server_roles (server_id, role_id)
-SELECT s.id, r.id
-FROM servers s
-JOIN roles r ON (
-    (s.hostname = 'mock-pay-web-01.internal' AND r.name = 'web-server')
-    OR (s.hostname = 'mock-pay-db-01.internal' AND r.name = 'database')
-    OR (s.hostname = 'mock-ops-worker-01.internal' AND r.name = 'worker')
-)
-ON CONFLICT (server_id, role_id) DO NOTHING;
+-- ---------------------------------------------------------------------------
+-- Sentinel Agents
+-- ---------------------------------------------------------------------------
 
 INSERT INTO sentinel_agents (
     server_id,
@@ -186,6 +218,10 @@ FROM (
         )
 ) AS seed(hostname, version, git_commit, status, capabilities_proof, last_connected_at)
 JOIN servers s ON s.hostname = seed.hostname;
+
+-- ---------------------------------------------------------------------------
+-- Canary Decoy Files
+-- ---------------------------------------------------------------------------
 
 INSERT INTO canary_decoy_files (
     server_id,
@@ -236,6 +272,10 @@ FROM (
 ) AS seed(hostname, file_path, decoy_type, original_hash, status, planted_at, last_verified)
 JOIN servers s ON s.hostname = seed.hostname;
 
+-- ---------------------------------------------------------------------------
+-- Tamper Alerts
+-- ---------------------------------------------------------------------------
+
 INSERT INTO tamper_alerts (
     server_id,
     agent_id,
@@ -250,13 +290,13 @@ SELECT
     seed.event_type,
     seed.severity,
     jsonb_build_object(
-        'pid', seed.pid,
-        'uid', seed.uid,
-        'auid', seed.auid,
-        'exe', seed.exe,
-        'syscall', seed.syscall,
+        'pid',          seed.pid,
+        'uid',          seed.uid,
+        'auid',         seed.auid,
+        'exe',          seed.exe,
+        'syscall',      seed.syscall,
         'decoy_file_id', d.id,
-        'mock', true
+        'mock',         true
     ),
     seed.detected_at
 FROM (
@@ -313,16 +353,39 @@ JOIN servers s ON s.hostname = seed.hostname
 LEFT JOIN sentinel_agents a ON a.server_id = s.id
 LEFT JOIN canary_decoy_files d ON d.server_id = s.id AND d.file_path = seed.file_path;
 
+-- ---------------------------------------------------------------------------
+-- Alert Mitigations (one sample resolved alert for the critical tamper)
+-- ---------------------------------------------------------------------------
+
+INSERT INTO alert_mitigations (alert_id, analyst_user_id, mitigation_notes)
+SELECT
+    ta.id,
+    u.id,
+    'Mock mitigation: decoy file restored and auditd rules reapplied. Attacker IP blocked at perimeter firewall.'
+FROM tamper_alerts ta
+JOIN servers s ON s.id = ta.server_id AND s.hostname = 'mock-pay-db-01.internal'
+JOIN users u ON u.email = 'bob@mock-acme.example'
+WHERE ta.event_type = 'DECOY_TAMPER'
+  AND ta.severity = 'critical'
+LIMIT 1
+ON CONFLICT (alert_id) DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- Summary
+-- ---------------------------------------------------------------------------
+
 SELECT
     :'tenant_slug' AS tenant_slug,
-    (SELECT count(*) FROM public.tenants WHERE slug = :'tenant_slug') AS tenants,
-    (SELECT count(*) FROM public.global_audit_log gal JOIN public.tenants t ON t.id = gal.tenant_id WHERE t.slug = :'tenant_slug') AS audit_events,
-    (SELECT count(*) FROM projects WHERE name LIKE 'Mock %') AS projects,
-    (SELECT count(*) FROM servers WHERE hostname LIKE 'mock-%') AS servers,
-    (SELECT count(*) FROM roles WHERE name IN ('web-server', 'database', 'worker')) AS roles,
-    (SELECT count(*) FROM server_roles sr JOIN servers s ON s.id = sr.server_id WHERE s.hostname LIKE 'mock-%') AS server_roles,
-    (SELECT count(*) FROM sentinel_agents a JOIN servers s ON s.id = a.server_id WHERE s.hostname LIKE 'mock-%') AS sentinel_agents,
-    (SELECT count(*) FROM canary_decoy_files d JOIN servers s ON s.id = d.server_id WHERE s.hostname LIKE 'mock-%') AS canary_decoy_files,
-    (SELECT count(*) FROM tamper_alerts ta JOIN servers s ON s.id = ta.server_id WHERE s.hostname LIKE 'mock-%') AS tamper_alerts;
+    (SELECT count(*) FROM public.tenants WHERE slug = :'tenant_slug')                                                                      AS tenants,
+    (SELECT count(*) FROM public.global_audit_log gal JOIN public.tenants t ON t.id = gal.tenant_id WHERE t.slug = :'tenant_slug')         AS audit_events,
+    (SELECT count(*) FROM projects      WHERE name  LIKE 'Mock %')                                                                         AS projects,
+    (SELECT count(*) FROM servers       WHERE hostname LIKE 'mock-%')                                                                      AS servers,
+    (SELECT count(*) FROM users         WHERE email LIKE '%@mock-acme%')                                                                   AS users,
+    (SELECT count(*) FROM roles         WHERE name IN ('tenant-admin', 'security-analyst', 'read-only'))                                   AS rbac_roles,
+    (SELECT count(*) FROM user_roles    ur JOIN users u ON u.id = ur.user_id WHERE u.email LIKE '%@mock-acme%')                            AS user_role_assignments,
+    (SELECT count(*) FROM sentinel_agents a  JOIN servers s ON s.id = a.server_id WHERE s.hostname LIKE 'mock-%')                          AS sentinel_agents,
+    (SELECT count(*) FROM canary_decoy_files d JOIN servers s ON s.id = d.server_id WHERE s.hostname LIKE 'mock-%')                        AS canary_decoy_files,
+    (SELECT count(*) FROM tamper_alerts ta   JOIN servers s ON s.id = ta.server_id WHERE s.hostname LIKE 'mock-%')                         AS tamper_alerts,
+    (SELECT count(*) FROM alert_mitigations am JOIN tamper_alerts ta ON ta.id = am.alert_id JOIN servers s ON s.id = ta.server_id WHERE s.hostname LIKE 'mock-%') AS alert_mitigations;
 
 DROP TABLE mock_seed_config;
