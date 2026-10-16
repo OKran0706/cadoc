@@ -92,7 +92,7 @@ async def test_summary_kpi_zero_agents():
             return mock_crit
         elif "alert_mitigations" in stmt_str:
             return mock_mit
-        elif "admin_user_roles" in stmt_str:
+        elif "users" in stmt_str:
             return mock_analysts
         elif "sentinel_agents" in stmt_str:
             return mock_agents_count
@@ -131,7 +131,7 @@ async def test_summary_kpi_with_agents():
             return mock_crit
         elif "alert_mitigations" in stmt_str:
             return mock_mit
-        elif "admin_user_roles" in stmt_str:
+        elif "users" in stmt_str:
             return mock_analysts
         elif "sentinel_agents" in stmt_str:
             return mock_agents_count

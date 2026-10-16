@@ -3,22 +3,22 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: Sentinel Hardening
 status: completed
-last_updated: "2026-05-21T14:57:51.271Z"
-last_activity: 2026-05-21 -- Phase 29 marked complete
+last_updated: "2026-06-11T17:57:38Z"
+last_activity: 2026-06-11 -- Phase 32 marked complete
 progress:
   total_phases: 7
-  completed_phases: 2
-  total_plans: 6
-  completed_plans: 3
-  percent: 50
+  completed_phases: 4
+  total_plans: 8
+  completed_plans: 5
+  percent: 62.5
 ---
 
 ## Current Position
 
-Phase: 29 — COMPLETE
+Phase: 32 — COMPLETE
 Plan: 1 of 1
-Status: Phase 29 complete
-Last activity: 2026-05-21 -- Phase 29 marked complete
+Status: Phase 32 complete
+Last activity: 2026-06-11 -- Phase 32 marked complete
 
 ## Accumulated Context
 
@@ -35,13 +35,16 @@ Last activity: 2026-05-21 -- Phase 29 marked complete
 - Phase 28 complete: Fetch system metrics in heartbeat (real-time telemetry).
 - Phase 29 complete: Create administrative control plane
 - Phase 30 added: the api endpoints
-- Phase 31 added: Implement multi-tenant auth updates (consolidate public/tenant schemas)
+- Phase 31 complete: Implement multi-tenant auth updates (consolidate public/tenant schemas)
+- Phase 32 complete: fixing broken apis
+
 
 ## Progress
 
 | Phase                    | Milestone | Plans | Status   | Completed  |
 | ------------------------ | --------- | ----- | -------- | ---------- |
-| 31. Multi-Tenant Auth    | v1.6      | 0/1   | Pending  | -          |
+| 32. Fixing Broken APIs   | v1.6      | 1/1   | Complete | 2026-06-11 |
+| 31. Multi-Tenant Auth    | v1.6      | 1/1   | Complete | 2026-06-11 |
 | 30. The API Endpoints    | v1.6      | 0/1   | Pending  | -          |
 | 29. Admin Control Plane  | v1.6      | 1/1   | Complete | 2026-05-21 |
 | 28. System Metrics in HB | v1.6      | 1/1   | Complete | 2026-05-18 |

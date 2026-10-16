@@ -302,13 +302,12 @@ async def get_summary_kpis(
     mit_res = await db.execute(mit_stmt)
     mitigated_incidents = mit_res.scalar() or 0
     
-    # 3. Active Analysts (distinct analyst users assigned to this tenant or platform-wide)
-    analysts_stmt = text("""
-        SELECT COUNT(DISTINCT admin_user_id) 
-        FROM public.admin_user_roles 
-        WHERE tenant_id = :tenant_id OR tenant_id IS NULL
+    # 3. Active Analysts (distinct analyst users assigned to this tenant)
+    analysts_stmt = text(f"""
+        SELECT COUNT(DISTINCT id) 
+        FROM "client_{company_slug}".users
     """)
-    analysts_res = await db.execute(analysts_stmt, {"tenant_id": tenant_id})
+    analysts_res = await db.execute(analysts_stmt)
     active_analysts = analysts_res.scalar() or 0
     
     # 4. Network Uptime

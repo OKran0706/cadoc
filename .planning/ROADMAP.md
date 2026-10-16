@@ -189,7 +189,17 @@ Plans:
 **Goal:** Consolidate platform auth tables into global admins and tenant-isolated users/roles/keys.
 **Requirements**: TBD
 **Depends on:** Phase 30
-**Plans:** 0/1 plans complete
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] 31-01: Federated Multi-Tenant Auth Schema Consolidation
+- [x] 31-01: Federated Multi-Tenant Auth Schema Consolidation (completed 2026-06-11)
+
+### Phase 32: fixing broken apis
+
+**Goal:** Refactor and fix broken API endpoints and align tests with consolidated multi-tenant schemas.
+**Requirements**: TBD
+**Depends on:** Phase 31
+**Plans:** 1/1 plans complete
+
+Plans:
+- [x] 32-01: Refactoring Broken APIs for Consolidated Auth Schema (completed 2026-06-11)

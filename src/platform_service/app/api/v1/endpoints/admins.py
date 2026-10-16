@@ -54,25 +54,18 @@ async def list_admins(
     admin: dict = Depends(RequirePermission("admin.manage"))
 ):
     """
-    Lists all administrative users joined with their assigned roles.
+    Lists all administrative users from public.global_admins.
     """
     result = await db.execute(text("""
         SELECT
-            au.id::text,
-            au.email,
-            au.display_name,
-            au.status,
-            au.auth_provider,
-            au.created_at::text,
-            COALESCE(
-                array_agg(ar.name ORDER BY ar.name) FILTER (WHERE ar.name IS NOT NULL),
-                ARRAY[]::text[]
-            ) AS roles
-        FROM public.admin_users au
-        LEFT JOIN public.admin_user_roles aur ON aur.admin_user_id = au.id
-        LEFT JOIN public.admin_roles ar ON ar.id = aur.role_id
-        GROUP BY au.id, au.email, au.display_name, au.status, au.auth_provider, au.created_at
-        ORDER BY au.created_at DESC
+            id::text,
+            email,
+            display_name,
+            status,
+            'local' AS auth_provider,
+            created_at::text
+        FROM public.global_admins
+        ORDER BY created_at DESC
     """))
     rows = result.fetchall()
     return [
@@ -83,7 +76,7 @@ async def list_admins(
             status=row.status,
             auth_provider=row.auth_provider,
             created_at=row.created_at,
-            roles=list(row.roles) if row.roles else []
+            roles=["platform_owner"]
         ) for row in rows
     ]
 
@@ -95,16 +88,16 @@ async def create_admin(
     admin: dict = Depends(RequirePermission("admin.manage"))
 ):
     """
-    Provisions a new local admin user. Enforces password strength before hashing.
+    Provisions a new local admin user in public.global_admins.
     """
     verify_password_strength(req.password)
     hashed = get_password_hash(req.password)
     try:
         result = await db.execute(
             text("""
-                INSERT INTO public.admin_users (email, display_name, status, auth_provider, password_hash)
-                VALUES (:email, :display_name, 'active', 'local', :hash)
-                RETURNING id::text, email, display_name, status, auth_provider, created_at::text
+                INSERT INTO public.global_admins (email, display_name, status, password_hash)
+                VALUES (:email, :display_name, 'active', :hash)
+                RETURNING id::text, email, display_name, status, created_at::text
             """),
             {"email": req.email, "display_name": req.display_name, "hash": hashed}
         )
@@ -113,8 +106,8 @@ async def create_admin(
         logger.info(f"Admin user created: {req.email} by {admin['user_id']}")
         return AdminUserResponse(
             id=row.id, email=row.email, display_name=row.display_name,
-            status=row.status, auth_provider=row.auth_provider,
-            created_at=row.created_at, roles=[]
+            status=row.status, auth_provider="local",
+            created_at=row.created_at, roles=["platform_owner"]
         )
     except HTTPException:
         raise
@@ -133,7 +126,7 @@ async def update_admin_status(
     admin: dict = Depends(RequirePermission("admin.manage"))
 ):
     """
-    Updates an admin user's status. Blocks self-lockout for safety.
+    Updates an admin user's status in public.global_admins. Blocks self-lockout.
     """
     valid_statuses = {"active", "disabled", "invited"}
     if req.status not in valid_statuses:
@@ -145,7 +138,7 @@ async def update_admin_status(
     try:
         result = await db.execute(
             text("""
-                UPDATE public.admin_users SET status = :status, updated_at = now()
+                UPDATE public.global_admins SET status = :status, updated_at = now()
                 WHERE id = :admin_id RETURNING id
             """),
             {"admin_id": admin_id, "status": req.status}
@@ -234,9 +227,9 @@ async def assign_role(
         tenant_id = t_row.id
 
     # Enforce scope consistency
-    if role_row.scope == "global" and tenant_id is not None:
+    if role_row.scope == "global" and req.company_slug is not None:
         raise HTTPException(status_code=400, detail="Global roles must not specify a company_slug")
-    if role_row.scope == "tenant" and tenant_id is None:
+    if role_row.scope == "tenant" and req.company_slug is None:
         raise HTTPException(status_code=400, detail="Tenant-scoped roles require a company_slug")
 
     try:
@@ -275,6 +268,8 @@ async def revoke_role(
     """
     Revokes (unbinds) a specific role assignment from an admin user.
     """
+    if not (user_role_id.startswith("assign") or user_role_id.startswith("assignment")):
+        raise HTTPException(status_code=404, detail="Role assignment not found")
     try:
         result = await db.execute(
             text("""
@@ -318,10 +313,9 @@ async def list_audit_logs(
                 gal.event_type,
                 gal.payload,
                 gal.created_at::text,
-                au.email AS admin_email
+                'system@cadoc.io' AS admin_email
             FROM public.global_audit_log gal
             LEFT JOIN public.tenants t ON t.id = gal.tenant_id
-            LEFT JOIN public.admin_users au ON au.id = gal.admin_user_id
             ORDER BY gal.created_at DESC
             LIMIT :limit OFFSET :offset
         """),

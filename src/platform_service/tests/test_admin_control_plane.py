@@ -74,9 +74,10 @@ async def test_api_keys_crud_success(monkeypatch):
     # 2. Check admin_has_permission
     # 3. Insert new api key
     local_mock_db.execute.side_effect = [
-        MagicMock(fetchone=MagicMock(return_value=mock_tenant_row)),
-        MagicMock(scalar=MagicMock(return_value=True)),
-        MagicMock(fetchone=MagicMock(return_value=mock_insert_row))
+        MagicMock(fetchone=MagicMock(return_value=mock_tenant_row)), # tenant lookup
+        MagicMock(scalar=MagicMock(return_value=True)), # permission check
+        MagicMock(scalar=MagicMock(return_value="client_client-a")), # set_tenant_search_path
+        MagicMock(fetchone=MagicMock(return_value=mock_insert_row)) # Insert key
     ]
     
     headers = get_auth_headers("client-a")
@@ -91,7 +92,7 @@ async def test_api_keys_crud_success(monkeypatch):
     res_data = response.json()
     assert res_data["id"] == "key-uuid-999"
     assert res_data["name"] == "test-prod-key"
-    assert "cadoc_live_" in res_data["plain_text_key"]
+    assert "cadoc_t_client-a_" in res_data["plain_text_key"]
     assert res_data["expires_at"] == "2026-05-31 12:00:00"
 
 @pytest.mark.asyncio

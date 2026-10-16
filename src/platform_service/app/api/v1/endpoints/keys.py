@@ -40,9 +40,14 @@ async def create_api_key(
     and returns the plain-text key once.
     """
     user_id = admin["user_id"]
+    company_slug = admin["company_slug"]
     
-    # 1. Generate secure random API key
-    raw_key = f"cadoc_live_{secrets.token_hex(24)}"
+    # 1. Generate secure random API key with prefix
+    if company_slug == "global":
+        raw_key = f"cadoc_g_{secrets.token_hex(24)}"
+    else:
+        raw_key = f"cadoc_t_{company_slug}_{secrets.token_hex(24)}"
+        
     hashed_key = hashlib.sha256(raw_key.encode()).hexdigest()
     
     # Calculate expiration
@@ -51,19 +56,36 @@ async def create_api_key(
         expires_at = datetime.now(timezone.utc) + timedelta(days=req.expires_in_days)
     
     try:
-        result = await db.execute(
-            text("""
-                INSERT INTO public.admin_api_keys (admin_user_id, name, key_hash, expires_at)
-                VALUES (:user_id, :name, :key_hash, :expires_at)
-                RETURNING id, created_at::text, expires_at::text
-            """),
-            {
-                "user_id": user_id,
-                "name": req.name,
-                "key_hash": hashed_key,
-                "expires_at": expires_at
-            }
-        )
+        if company_slug == "global":
+            result = await db.execute(
+                text("""
+                    INSERT INTO public.global_api_keys (admin_id, name, key_hash, expires_at)
+                    VALUES (:user_id, :name, :key_hash, :expires_at)
+                    RETURNING id, created_at::text, expires_at::text
+                """),
+                {
+                    "user_id": user_id,
+                    "name": req.name,
+                    "key_hash": hashed_key,
+                    "expires_at": expires_at
+                }
+            )
+        else:
+            from app.core.database import set_tenant_search_path
+            await set_tenant_search_path(db, company_slug)
+            result = await db.execute(
+                text(f"""
+                    INSERT INTO "client_{company_slug}".api_keys (user_id, name, key_hash, expires_at)
+                    VALUES (:user_id, :name, :key_hash, :expires_at)
+                    RETURNING id, created_at::text, expires_at::text
+                """),
+                {
+                    "user_id": user_id,
+                    "name": req.name,
+                    "key_hash": hashed_key,
+                    "expires_at": expires_at
+                }
+            )
         row = result.fetchone()
         await db.commit()
         
@@ -87,15 +109,30 @@ async def list_api_keys(
     Lists metadata of active, expired, or revoked keys for the authenticated user.
     """
     user_id = admin["user_id"]
-    result = await db.execute(
-        text("""
-            SELECT id, name, created_at::text, expires_at::text, revoked_at::text
-            FROM public.admin_api_keys
-            WHERE admin_user_id = :user_id
-            ORDER BY created_at DESC
-        """),
-        {"user_id": user_id}
-    )
+    company_slug = admin["company_slug"]
+    
+    if company_slug == "global":
+        result = await db.execute(
+            text("""
+                SELECT id, name, created_at::text, expires_at::text, revoked_at::text
+                FROM public.global_api_keys
+                WHERE admin_id = :user_id
+                ORDER BY created_at DESC
+            """),
+            {"user_id": user_id}
+        )
+    else:
+        from app.core.database import set_tenant_search_path
+        await set_tenant_search_path(db, company_slug)
+        result = await db.execute(
+            text(f"""
+                SELECT id, name, created_at::text, expires_at::text, revoked_at::text
+                FROM "client_{company_slug}".api_keys
+                WHERE user_id = :user_id
+                ORDER BY created_at DESC
+            """),
+            {"user_id": user_id}
+        )
     rows = result.fetchall()
     
     return [
@@ -118,15 +155,28 @@ async def revoke_api_key(
     Revokes the specified programmatic API key.
     """
     user_id = admin["user_id"]
+    company_slug = admin["company_slug"]
     try:
-        result = await db.execute(
-            text("""
-                UPDATE public.admin_api_keys
-                SET revoked_at = now()
-                WHERE id = :key_id AND admin_user_id = :user_id AND revoked_at IS NULL
-            """),
-            {"key_id": key_id, "user_id": user_id}
-        )
+        if company_slug == "global":
+            result = await db.execute(
+                text("""
+                    UPDATE public.global_api_keys
+                    SET revoked_at = now()
+                    WHERE id = :key_id AND admin_id = :user_id AND revoked_at IS NULL
+                """),
+                {"key_id": key_id, "user_id": user_id}
+            )
+        else:
+            from app.core.database import set_tenant_search_path
+            await set_tenant_search_path(db, company_slug)
+            result = await db.execute(
+                text(f"""
+                    UPDATE "client_{company_slug}".api_keys
+                    SET revoked_at = now()
+                    WHERE id = :key_id AND user_id = :user_id AND revoked_at IS NULL
+                """),
+                {"key_id": key_id, "user_id": user_id}
+            )
         if result.rowcount == 0:
             raise HTTPException(status_code=404, detail="API Key not found or already revoked")
         await db.commit()
