@@ -368,10 +368,10 @@ async def list_clients(
         try:
             counts_res = await db.execute(text(f"""
                 SELECT
-                    (SELECT COUNT(*) FROM {schema}.servers)                                          AS server_count,
-                    (SELECT COUNT(*) FROM {schema}.sentinel_agents WHERE status = 'active')          AS active_agent_count,
-                    (SELECT COUNT(*) FROM {schema}.canary_decoy_files WHERE status = 'planted')      AS planted_decoy_count,
-                    (SELECT COUNT(*) FROM {schema}.tamper_alerts)                                    AS alert_count
+                    (SELECT COUNT(*) FROM "{schema}".servers)                                          AS server_count,
+                    (SELECT COUNT(*) FROM "{schema}".sentinel_agents WHERE status = 'active')          AS active_agent_count,
+                    (SELECT COUNT(*) FROM "{schema}".canary_decoy_files WHERE status = 'planted')      AS planted_decoy_count,
+                    (SELECT COUNT(*) FROM "{schema}".tamper_alerts)                                    AS alert_count
             """))
             counts = counts_res.fetchone()
             summaries.append({
@@ -428,21 +428,21 @@ async def get_client_detail(
         # Servers
         servers_res = await db.execute(text(f"""
             SELECT id::text, hostname, ip_address::text, COALESCE(specs->>'os_type', 'Linux') AS os_type, status, created_at::text
-            FROM {schema}.servers ORDER BY created_at DESC
+            FROM "{schema}".servers ORDER BY created_at DESC
         """))
         servers = [dict(r._mapping) for r in servers_res.fetchall()]
 
         # Sentinel Agents
         agents_res = await db.execute(text(f"""
             SELECT id::text, server_id::text, status, version, last_connected_at::text AS last_seen_at, created_at::text
-            FROM {schema}.sentinel_agents ORDER BY last_connected_at DESC NULLS LAST
+            FROM "{schema}".sentinel_agents ORDER BY last_connected_at DESC NULLS LAST
         """))
         agents = [dict(r._mapping) for r in agents_res.fetchall()]
 
         # Decoy Files
         decoys_res = await db.execute(text(f"""
             SELECT id::text, server_id::text, file_path, decoy_type AS file_type, status, planted_at::text
-            FROM {schema}.canary_decoy_files ORDER BY planted_at DESC NULLS LAST
+            FROM "{schema}".canary_decoy_files ORDER BY planted_at DESC NULLS LAST
         """))
         decoys = [dict(r._mapping) for r in decoys_res.fetchall()]
 
@@ -450,7 +450,7 @@ async def get_client_detail(
         alerts_res = await db.execute(text(f"""
             SELECT id::text, server_id::text, COALESCE(details->>'file_path', '') AS file_path, event_type AS alert_type, severity,
                    detected_at::text AS triggered_at, NULL AS resolved_at
-            FROM {schema}.tamper_alerts ORDER BY detected_at DESC LIMIT 25
+            FROM "{schema}".tamper_alerts ORDER BY detected_at DESC LIMIT 25
         """))
         alerts = [dict(r._mapping) for r in alerts_res.fetchall()]
 

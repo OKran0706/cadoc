@@ -9,7 +9,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, APIKeyHea
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from app.core.config import settings
-from app.core.database import get_db_session
+from app.core.database import get_db_session, set_tenant_search_path
 
 pwd_context = CryptContext(schemes=["sha256_crypt", "bcrypt"], deprecated="auto")
 security_bearer = HTTPBearer(auto_error=False)
@@ -114,33 +114,48 @@ class RequirePermission:
                 raise exc
         # 2. Try X-API-Key Authentication
         elif api_key:
-            hashed_key = hashlib.sha256(api_key.encode()).hexdigest()
-            res = await db.execute(
-                text("""
-                    SELECT id, admin_user_id 
-                    FROM public.admin_api_keys 
-                    WHERE key_hash = :hash AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())
-                """),
-                {"hash": hashed_key}
-            )
-            key_row = res.fetchone()
-            if not key_row:
+            if api_key.startswith("cadoc_g_"):
+                raw_secret = api_key.removeprefix("cadoc_g_")
+                hashed_key = hashlib.sha256(raw_secret.encode()).hexdigest()
+                res = await db.execute(
+                    text("""
+                        SELECT id, admin_id 
+                        FROM public.global_api_keys 
+                        WHERE key_hash = :hash AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())
+                    """),
+                    {"hash": hashed_key}
+                )
+                key_row = res.fetchone()
+                if not key_row:
+                    raise HTTPException(status_code=401, detail="Invalid or revoked API Key")
+                
+                user_id = str(key_row.admin_id)
+                company_slug = "global"
+            elif api_key.startswith("cadoc_t_"):
+                remaining = api_key.removeprefix("cadoc_t_")
+                if "_" not in remaining:
+                    raise HTTPException(status_code=401, detail="Invalid or revoked API Key")
+                company_slug, raw_secret = remaining.split("_", 1)
+                hashed_key = hashlib.sha256(raw_secret.encode()).hexdigest()
+                
+                # Switch search path to target tenant
+                await set_tenant_search_path(db, company_slug)
+                
+                res = await db.execute(
+                    text("""
+                        SELECT id, user_id 
+                        FROM api_keys 
+                        WHERE key_hash = :hash AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())
+                    """),
+                    {"hash": hashed_key}
+                )
+                key_row = res.fetchone()
+                if not key_row:
+                    raise HTTPException(status_code=401, detail="Invalid or revoked API Key")
+                
+                user_id = str(key_row.user_id)
+            else:
                 raise HTTPException(status_code=401, detail="Invalid or revoked API Key")
-            
-            user_id = str(key_row.admin_user_id)
-            
-            # Query tenant company slug mapping
-            tenant_res = await db.execute(
-                text("""
-                    SELECT t.slug 
-                    FROM public.admin_user_roles aur
-                    JOIN public.tenants t ON t.id = aur.tenant_id
-                    WHERE aur.admin_user_id = :user_id LIMIT 1
-                """),
-                {"user_id": key_row.admin_user_id}
-            )
-            u_row = tenant_res.fetchone()
-            company_slug = u_row.slug if u_row else "global"
         else:
             raise HTTPException(status_code=401, detail="Missing administrative credentials")
 
@@ -169,11 +184,26 @@ class RequirePermission:
         except Exception:
             pass
 
-        perm_res = await db.execute(
-            text("SELECT public.admin_has_permission(:user_id, :code, :tenant_id)"),
-            {"user_id": user_id, "code": self.permission_code, "tenant_id": tenant_id}
-        )
-        has_perm = perm_res.scalar()
+        if company_slug == "global":
+            admin_res = await db.execute(
+                text("SELECT 1 FROM public.global_admins WHERE id = :user_id AND status = 'active'"),
+                {"user_id": user_id}
+            )
+            has_perm = admin_res.fetchone() is not None
+        else:
+            perm_res = await db.execute(
+                text("""
+                    SELECT EXISTS (
+                        SELECT 1 
+                        FROM user_roles ur
+                        JOIN roles r ON r.id = ur.role_id
+                        WHERE ur.user_id = :user_id
+                          AND r.permissions ? :code
+                    )
+                """),
+                {"user_id": user_id, "code": self.permission_code}
+            )
+            has_perm = perm_res.scalar()
         
         try:
             await r.set(cache_key, "true" if has_perm else "false", ex=60)

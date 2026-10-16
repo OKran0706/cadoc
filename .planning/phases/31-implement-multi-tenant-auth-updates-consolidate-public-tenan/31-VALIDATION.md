@@ -1,9 +1,9 @@
 ---
 phase: 31
 slug: implement-multi-tenant-auth-updates-consolidate-public-tenan
-status: draft
+status: completed
 nyquist_compliant: true
-wave_0_complete: false
+wave_0_complete: true
 created: 2026-06-11
 ---
 
@@ -38,11 +38,11 @@ created: 2026-06-11
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 31-01-01 | 01 | 1 | AUTH-MIG | T-31-01 | Drop old public auth tables, create global_admins/global_api_keys, update provision_tenant | db-migration | `pytest src/platform_service/tests/test_security.py -k test_auth_migration` | ❌ W0 | ⬜ pending |
-| 31-01-02 | 01 | 1 | KEY-ROUTE | T-31-02 | Route prefix-based API keys to correct schema dynamically | unit | `pytest src/platform_service/tests/test_security.py -k test_api_key_routing` | ❌ W0 | ⬜ pending |
-| 31-01-03 | 01 | 2 | AUTH-LOGIN | T-31-03 | Authenticate both global admins (public) and tenant users (tenant schema) | integration | `pytest src/platform_service/tests/test_security.py -k test_federated_login` | ❌ W0 | ⬜ pending |
-| 31-01-04 | 01 | 2 | RBAC-CHECK | T-31-04 | Enforce global admin bypass and tenant-local role checks | integration | `pytest src/platform_service/tests/test_security.py -k test_federated_permissions` | ❌ W0 | ⬜ pending |
-| 31-01-05 | 01 | 2 | DEP-CLEANUP | T-31-05 | Dropping tenant schema automatically drops all local users, roles, and keys | database | `pytest src/platform_service/tests/test_security.py -k test_tenant_teardown_cleanup` | ❌ W0 | ⬜ pending |
+| 31-01-01 | 01 | 1 | AUTH-MIG | T-31-01 | Drop old public auth tables, create global_admins/global_api_keys, update provision_tenant | db-migration | `pytest src/platform_service/tests/test_security.py -k test_auth_migration` | ✅ W0 | ✅ green |
+| 31-01-02 | 01 | 1 | KEY-ROUTE | T-31-02 | Route prefix-based API keys to correct schema dynamically | unit | `pytest src/platform_service/tests/test_security.py -k test_api_key_routing` | ✅ W0 | ✅ green |
+| 31-01-03 | 01 | 2 | AUTH-LOGIN | T-31-03 | Authenticate both global admins (public) and tenant users (tenant schema) | integration | `pytest src/platform_service/tests/test_security.py -k test_federated_login` | ✅ W0 | ✅ green |
+| 31-01-04 | 01 | 2 | RBAC-CHECK | T-31-04 | Enforce global admin bypass and tenant-local role checks | integration | `pytest src/platform_service/tests/test_security.py -k test_federated_permissions` | ✅ W0 | ✅ green |
+| 31-01-05 | 01 | 2 | DEP-CLEANUP | T-31-05 | Dropping tenant schema automatically drops all local users, roles, and keys | database | `pytest src/platform_service/tests/test_security.py -k test_tenant_teardown_cleanup` | ✅ W0 | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -50,8 +50,8 @@ created: 2026-06-11
 
 ## Wave 0 Requirements
 
-- [ ] `src/platform_service/tests/test_security.py` — stubs for testing the consolidated auth migrations, prefix key verification, and federated login logic.
-- [ ] `database/migrations/006_consolidate_auth_schema.sql` — new migration SQL file.
+- [x] `src/platform_service/tests/test_security.py` — stubs for testing the consolidated auth migrations, prefix key verification, and federated login logic.
+- [x] `database/migrations/006_consolidate_auth_schema.sql` — new migration SQL file.
 
 ---
 
@@ -70,4 +70,4 @@ created: 2026-06-11
 - [x] Feedback latency < 10s
 - [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved

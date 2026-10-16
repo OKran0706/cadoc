@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
                 async with session.begin():
                     # Check if user already exists
                     chk_res = await session.execute(
-                        text("SELECT id FROM public.admin_users WHERE email = :email"),
+                        text("SELECT id FROM public.global_admins WHERE email = :email"),
                         {"email": settings.INITIAL_ADMIN_EMAIL}
                     )
                     row = chk_res.fetchone()
@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI):
                         # Update password
                         await session.execute(
                             text("""
-                                UPDATE public.admin_users 
+                                UPDATE public.global_admins 
                                 SET password_hash = :hash, updated_at = now()
                                 WHERE id = :user_id
                             """),
@@ -49,7 +49,7 @@ async def lifespan(app: FastAPI):
                         # Insert admin user
                         ins_res = await session.execute(
                             text("""
-                                INSERT INTO public.admin_users (email, display_name, status, password_hash)
+                                INSERT INTO public.global_admins (email, display_name, status, password_hash)
                                 VALUES (:email, 'Bootstrap Administrator', 'active', :hash)
                                 RETURNING id
                             """),
@@ -57,33 +57,6 @@ async def lifespan(app: FastAPI):
                         )
                         user_id = ins_res.scalar()
                         logger.info(f"✓ Dynamic admin bootstrap: created user {settings.INITIAL_ADMIN_EMAIL}")
-                        
-                    # Make sure they have the platform_owner role
-                    role_res = await session.execute(
-                        text("SELECT id FROM public.admin_roles WHERE name = 'platform_owner'")
-                    )
-                    role_row = role_res.fetchone()
-                    if role_row:
-                        role_id = role_row.id
-                        # Check assignment
-                        assign_res = await session.execute(
-                            text("""
-                                SELECT id FROM public.admin_user_roles 
-                                WHERE admin_user_id = :user_id AND role_id = :role_id AND tenant_id IS NULL
-                            """),
-                            {"user_id": user_id, "role_id": role_id}
-                        )
-                        if not assign_res.fetchone():
-                            await session.execute(
-                                text("""
-                                    INSERT INTO public.admin_user_roles (admin_user_id, role_id, tenant_id)
-                                    VALUES (:user_id, :role_id, NULL)
-                                """),
-                                {"user_id": user_id, "role_id": role_id}
-                            )
-                            logger.info("✓ Dynamic admin bootstrap: assigned platform_owner role")
-                    else:
-                        logger.error("⚠ Role platform_owner not found during bootstrap!")
         except Exception as exc:
             logger.error(f"❌ Failed to run administrative bootstrapping on startup: {exc}")
 

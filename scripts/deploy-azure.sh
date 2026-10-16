@@ -45,15 +45,15 @@ else
 fi
 free -h
 
-# 3. Update repositories and Install Docker & Docker-Compose
-echo -e "\n${BLUE}[Step 2/4] Installing Docker and Docker-Compose...${CLEAR}"
+# 3. Update repositories and Install Docker & Docker-Compose V2
+echo -e "\n${BLUE}[Step 2/4] Installing Docker and Docker-Compose V2...${CLEAR}"
 apt-get update -y
-apt-get install -y docker.io docker-compose
+apt-get install -y docker.io docker-compose-v2
 
 # Start and enable Docker daemon
 systemctl start docker
 systemctl enable docker
-echo -e "${GREEN}✓ Docker & Docker-Compose successfully installed and active!${CLEAR}"
+echo -e "${GREEN}✓ Docker & Docker-Compose V2 successfully installed and active!${CLEAR}"
 
 # 4. User Group Management
 echo -e "\n${BLUE}[Step 3/4] Configuring user permissions...${CLEAR}"

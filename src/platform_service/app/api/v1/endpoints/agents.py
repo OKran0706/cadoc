@@ -36,7 +36,7 @@ async def decommission_agent(
     try:
         # Check if agent exists
         chk_res = await db.execute(
-            text(f"SELECT id FROM client_{company_slug}.sentinel_agents WHERE id = :agent_id"),
+            text(f"SELECT id FROM \"client_{company_slug}\".sentinel_agents WHERE id = :agent_id"),
             {"agent_id": agent_id}
         )
         if not chk_res.fetchone():
@@ -45,7 +45,7 @@ async def decommission_agent(
         # 1. Update DB Status
         await db.execute(
             text(f"""
-                UPDATE client_{company_slug}.sentinel_agents 
+                UPDATE "client_{company_slug}".sentinel_agents 
                 SET status = 'offline', updated_at = now() 
                 WHERE id = :agent_id
             """),
@@ -103,7 +103,7 @@ async def recommission_agent(
     try:
         # Check if agent exists
         chk_res = await db.execute(
-            text(f"SELECT id FROM client_{company_slug}.sentinel_agents WHERE id = :agent_id"),
+            text(f"SELECT id FROM \"client_{company_slug}\".sentinel_agents WHERE id = :agent_id"),
             {"agent_id": agent_id}
         )
         if not chk_res.fetchone():
@@ -112,7 +112,7 @@ async def recommission_agent(
         # 1. Update DB Status
         await db.execute(
             text(f"""
-                UPDATE client_{company_slug}.sentinel_agents 
+                UPDATE "client_{company_slug}".sentinel_agents 
                 SET status = 'active', updated_at = now() 
                 WHERE id = :agent_id
             """),

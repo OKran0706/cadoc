@@ -14,6 +14,7 @@ router = APIRouter()
 class LoginRequest(BaseModel):
     email: str
     password: str
+    company_slug: str = "global"
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -22,8 +23,8 @@ class TokenResponse(BaseModel):
 @router.post("/login", response_model=TokenResponse)
 async def login(req: LoginRequest, request: Request, db: AsyncSession = Depends(get_db_session)):
     """
-    Authenticates a user against public.admin_users and retrieves their global
-    role mapping or tenant company slug. Returns an active JWT token.
+    Authenticates a user against public.global_admins or tenant-local users,
+    and returns an active JWT token.
     Supports optional Redis-backed rate-limiting when enabled.
     """
     ip_address = request.client.host if request.client else "unknown"
@@ -48,12 +49,21 @@ async def login(req: LoginRequest, request: Request, db: AsyncSession = Depends(
             # Gracefully fail-open if Redis is down
             pass
 
-    # Query corresponding user in public.admin_users
-    result = await db.execute(
-        text("SELECT id, email, display_name, password_hash FROM public.admin_users WHERE email = :email AND status = 'active'"),
-        {"email": req.email}
-    )
-    user = result.fetchone()
+    # Authenticate user depending on the scope
+    if req.company_slug == "global":
+        result = await db.execute(
+            text("SELECT id, email, display_name, password_hash FROM public.global_admins WHERE email = :email AND status = 'active'"),
+            {"email": req.email}
+        )
+        user = result.fetchone()
+    else:
+        from app.core.database import set_tenant_search_path
+        await set_tenant_search_path(db, req.company_slug)
+        result = await db.execute(
+            text("SELECT id, email, display_name, password_hash FROM users WHERE email = :email"),
+            {"email": req.email}
+        )
+        user = result.fetchone()
     
     is_valid = user and verify_password(req.password, user.password_hash)
     
@@ -94,25 +104,12 @@ async def login(req: LoginRequest, request: Request, db: AsyncSession = Depends(
             )
         except Exception:
             pass
-            
-    # Query corresponding company slug
-    tenant_result = await db.execute(
-        text("""
-            SELECT t.slug 
-            FROM public.admin_user_roles aur
-            JOIN public.tenants t ON t.id = aur.tenant_id
-            WHERE aur.admin_user_id = :user_id LIMIT 1
-        """),
-        {"user_id": user.id}
-    )
-    tenant_row = tenant_result.fetchone()
-    company_slug = tenant_row.slug if tenant_row else "global"
 
     payload = {
         "sub": str(user.id),
         "email": user.email,
         "name": user.display_name,
-        "company_slug": company_slug,
+        "company_slug": req.company_slug,
         "iat": int(time.time()),
         "exp": int(time.time()) + (settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60)
     }

@@ -71,11 +71,11 @@ async def mark_agent_online(company_slug: str, agent_id: str):
         try:
             await session.begin()
             # Set search path to keep tests / connection session happy
-            await session.execute(text(f"SET search_path = client_{company_slug}"))
+            await session.execute(text(f'SET search_path = "client_{company_slug}"'))
             # Reactively change active state to 'active'
             up_res = await session.execute(
                 text(f"""
-                    UPDATE client_{company_slug}.sentinel_agents 
+                    UPDATE "client_{company_slug}".sentinel_agents 
                     SET status = 'active', last_connected_at = now(), updated_at = now() 
                     WHERE id = :agent_id AND status != 'active'
                 """),
@@ -121,11 +121,11 @@ async def mark_agent_offline(company_slug: str, agent_id: str):
         try:
             await session.begin()
             # Set search path to keep tests / connection session happy
-            await session.execute(text(f"SET search_path = client_{company_slug}"))
+            await session.execute(text(f'SET search_path = "client_{company_slug}"'))
             # Reactively change active state to 'offline'
             up_res = await session.execute(
                 text(f"""
-                    UPDATE client_{company_slug}.sentinel_agents 
+                    UPDATE "client_{company_slug}".sentinel_agents 
                     SET status = 'offline', updated_at = now() 
                     WHERE id = :agent_id AND status != 'offline'
                 """),

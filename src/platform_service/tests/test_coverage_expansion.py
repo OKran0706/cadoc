@@ -196,15 +196,10 @@ async def test_main_lifespan_bootstrap_scenarios(monkeypatch):
     mock_chk = MagicMock()
     mock_chk.fetchone.return_value = MagicMock(id="existing-user-uuid")
     
-    mock_role = MagicMock()
-    mock_role.fetchone.return_value = MagicMock(id="platform-owner-role-uuid")
-    
     # Simulate DB execution pipeline
     mock_session.execute.side_effect = [
         mock_chk,   # Check if user exists
-        AsyncMock(), # Update password execute
-        mock_role,  # Get role platform_owner
-        MagicMock(fetchone=MagicMock(return_value=True)) # Assignment exists
+        AsyncMock() # Update password execute
     ]
     
     # Correct session context manager to support "async with session.begin():"
@@ -217,7 +212,7 @@ async def test_main_lifespan_bootstrap_scenarios(monkeypatch):
     async with lifespan(app):
         pass
         
-    # 2. Test scenario where admin is created fresh & role assigned (covers INSERT paths)
+    # 2. Test scenario where admin is created fresh (covers INSERT paths)
     mock_session_2 = AsyncMock()
     
     mock_chk_empty = MagicMock()
@@ -228,10 +223,7 @@ async def test_main_lifespan_bootstrap_scenarios(monkeypatch):
     
     mock_session_2.execute.side_effect = [
         mock_chk_empty,  # User check
-        mock_ins_res,    # User insert RETURNING id
-        mock_role,       # Get role platform_owner
-        MagicMock(fetchone=MagicMock(return_value=None)), # Assignment does not exist
-        AsyncMock()      # Insert assignment
+        mock_ins_res     # User insert RETURNING id
     ]
     mock_session_2.begin = MagicMock(return_value=AsyncMock())
     
@@ -573,73 +565,78 @@ async def test_security_gaps(monkeypatch):
     assert exc.value.status_code == 401
 
     # 5. RequirePermission API Key check with non-global tenant (lines 130-143)
+    monkeypatch.setattr("app.core.security.set_tenant_search_path", AsyncMock())
     auth_guard = RequirePermission("security.read")
     mock_request = MagicMock(spec=Request)
     
     # Valid hashed key lookup
-    mock_key = MagicMock(admin_user_id="user-uuid-key")
-    mock_tenant = MagicMock(slug="client-b")
+    mock_key_res = MagicMock()
+    mock_key_res.fetchone.return_value = MagicMock(user_id="user-uuid-key")
+    
+    mock_tenant_res = MagicMock()
+    mock_tenant_res.fetchone.return_value = MagicMock(id="tenant-id-key")
+    
+    mock_perm_res = MagicMock()
+    mock_perm_res.scalar.return_value = True
     
     mock_db.execute.side_effect = [
-        MagicMock(fetchone=MagicMock(return_value=mock_key)),  # API key query
-        MagicMock(fetchone=MagicMock(return_value=mock_tenant)),  # Tenant slug query
-        MagicMock(fetchone=MagicMock(return_value=MagicMock(id="tenant-id-key"))), # Resolve tenant ID
-        MagicMock(scalar=MagicMock(return_value=True))  # Permission validation (has_perm)
+        mock_key_res,     # API key query
+        mock_tenant_res,  # Tenant resolution query
+        mock_perm_res     # Permission validation (has_perm)
     ]
     
-    result = await auth_guard(request=mock_request, db=mock_db, api_key="cadoc_live_validkey", credentials=None)
+    result = await auth_guard(request=mock_request, db=mock_db, api_key="cadoc_t_client-b_validkey", credentials=None)
     assert result["user_id"] == "user-uuid-key"
     assert result["company_slug"] == "client-b"
-
+ 
     # 6. Inactive or missing tenant schema context (line 156)
     mock_db.reset_mock()
     mock_db.execute.side_effect = [
-        MagicMock(fetchone=MagicMock(return_value=mock_key)),  # API key query
-        MagicMock(fetchone=MagicMock(return_value=mock_tenant)),  # Tenant slug query
+        mock_key_res,     # API key query
         MagicMock(fetchone=MagicMock(return_value=None))  # Tenant resolution returns None (inactive/missing)
     ]
     with pytest.raises(HTTPException) as exc:
-        await auth_guard(request=mock_request, db=mock_db, api_key="cadoc_live_validkey", credentials=None)
+        await auth_guard(request=mock_request, db=mock_db, api_key="cadoc_t_client-b_validkey", credentials=None)
     assert exc.value.status_code == 403
     assert "Inactive or missing tenant schema" in exc.value.detail
 
     # 7. Cache hit permissions in Redis returning "false" (lines 168-170)
     mock_db.reset_mock()
     mock_db.execute.side_effect = None
-    mock_db.execute.return_value = MagicMock(scalar=MagicMock(return_value=False))
+    mock_db.execute.return_value = MagicMock(fetchone=MagicMock(return_value=None), scalar=MagicMock(return_value=False))
     mock_redis = AsyncMock()
     mock_redis.get.return_value = "false"
-    monkeypatch.setattr("redis.asyncio.from_url", lambda url, **kwargs: mock_redis)
+    monkeypatch.setattr("app.core.security.redis.from_url", lambda url, **kwargs: mock_redis)
     
     mock_credentials = MagicMock(credentials=jwt.encode({"sub": "u-123", "company_slug": "global"}, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM))
     with pytest.raises(HTTPException) as exc:
         await auth_guard(request=mock_request, db=mock_db, api_key=None, credentials=mock_credentials)
     assert exc.value.status_code == 403
     assert "Insufficient administrative permissions" in exc.value.detail
-
+ 
     # 8. Cache hit permissions in Redis returning "true" (lines 165-167)
     mock_redis.get.return_value = "true"
     result = await auth_guard(request=mock_request, db=mock_db, api_key=None, credentials=mock_credentials)
     assert result["user_id"] == "u-123"
-
+ 
     # 9. RBAC permission cache set exception (lines 180-181)
     mock_db.reset_mock()
     mock_redis.get.return_value = None  # Cache miss
     mock_redis.set.side_effect = Exception("Redis crash")
     
     mock_db.execute.side_effect = [
-        MagicMock(scalar=MagicMock(return_value=True))  # Permission matches
+        MagicMock(fetchone=MagicMock(return_value=MagicMock()))  # Global admin query matches
     ]
     result = await auth_guard(request=mock_request, db=mock_db, api_key=None, credentials=mock_credentials)
     assert result["user_id"] == "u-123"
-
+ 
     # 10. Insufficient permissions check when DB returns False (line 184)
     mock_db.reset_mock()
     mock_redis.get.return_value = None
     mock_redis.set.side_effect = None
     
     mock_db.execute.side_effect = [
-        MagicMock(scalar=MagicMock(return_value=False))  # Permission fails
+        MagicMock(fetchone=MagicMock(return_value=None), scalar=MagicMock(return_value=False))  # Permission fails
     ]
     with pytest.raises(HTTPException) as exc:
         await auth_guard(request=mock_request, db=mock_db, api_key=None, credentials=mock_credentials)

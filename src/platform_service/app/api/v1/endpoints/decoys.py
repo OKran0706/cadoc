@@ -54,7 +54,7 @@ async def list_decoys(
     sql = f"""
         SELECT id, server_id, file_path, decoy_type, original_hash, status,
                planted_at::text, last_verified::text, created_at::text, updated_at::text
-        FROM client_{company_slug}.canary_decoy_files
+        FROM "client_{company_slug}".canary_decoy_files
         {where_clause}
         ORDER BY planted_at DESC, id DESC
     """
@@ -101,7 +101,7 @@ async def get_decoy(
     sql = f"""
         SELECT id, server_id, file_path, decoy_type, original_hash, status,
                planted_at::text, last_verified::text, created_at::text, updated_at::text
-        FROM client_{company_slug}.canary_decoy_files
+        FROM "client_{company_slug}".canary_decoy_files
         WHERE id = :decoy_id
     """
     

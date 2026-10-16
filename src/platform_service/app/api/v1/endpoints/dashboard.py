@@ -71,7 +71,7 @@ async def get_alerts(
     # Prunes unused monthly tables by directly searching partition key detected_at
     sql = f"""
         SELECT id, server_id, event_type, severity, details, detected_at::text
-        FROM client_{company_slug}.tamper_alerts
+        FROM "client_{company_slug}".tamper_alerts
         WHERE 1=1
         {pruning_limit}
         ORDER BY detected_at DESC, id DESC
@@ -138,7 +138,7 @@ async def list_agents(
 
     sql = f"""
         SELECT id, server_id, version, git_commit, status, last_connected_at::text
-        FROM client_{company_slug}.sentinel_agents
+        FROM "client_{company_slug}".sentinel_agents
         ORDER BY last_connected_at DESC NULLS LAST, id DESC
     """
     result = await db.execute(text(sql))
@@ -183,7 +183,7 @@ async def get_agents_metrics(
                     break
 
                 sql = f"""
-                    SELECT id, server_id, status FROM client_{company_slug}.sentinel_agents
+                    SELECT id, server_id, status FROM "client_{company_slug}".sentinel_agents
                 """
                 result = await db.execute(text(sql))
                 agents = result.fetchall()
@@ -243,7 +243,7 @@ async def mitigate_alert(
     await set_tenant_search_path(db, company_slug)
     
     # Verify target alert exists
-    alert_stmt = text(f"SELECT id FROM client_{company_slug}.tamper_alerts WHERE id = :alert_id LIMIT 1")
+    alert_stmt = text(f"SELECT id FROM \"client_{company_slug}\".tamper_alerts WHERE id = :alert_id LIMIT 1")
     res = await db.execute(alert_stmt, {"alert_id": alert_id})
     alert = res.fetchone()
     if not alert:
@@ -251,7 +251,7 @@ async def mitigate_alert(
         
     # Append mitigation log
     insert_stmt = text(f"""
-        INSERT INTO client_{company_slug}.alert_mitigations (alert_id, analyst_user_id, mitigation_notes)
+        INSERT INTO "client_{company_slug}".alert_mitigations (alert_id, analyst_user_id, mitigation_notes)
         VALUES (:alert_id, :analyst_id, :notes)
         ON CONFLICT (alert_id) DO NOTHING
     """)
@@ -290,15 +290,15 @@ async def get_summary_kpis(
     # 1. Critical Alerts (unmitigated, critical severity)
     crit_stmt = text(f"""
         SELECT COUNT(*) 
-        FROM client_{company_slug}.tamper_alerts 
+        FROM "client_{company_slug}".tamper_alerts 
         WHERE severity = 'critical' 
-          AND id NOT IN (SELECT alert_id FROM client_{company_slug}.alert_mitigations)
+          AND id NOT IN (SELECT alert_id FROM "client_{company_slug}".alert_mitigations)
     """)
     crit_res = await db.execute(crit_stmt)
     critical_alerts = crit_res.scalar() or 0
     
     # 2. Mitigated Incidents (rows in alert_mitigations)
-    mit_stmt = text(f"SELECT COUNT(*) FROM client_{company_slug}.alert_mitigations")
+    mit_stmt = text(f"SELECT COUNT(*) FROM \"client_{company_slug}\".alert_mitigations")
     mit_res = await db.execute(mit_stmt)
     mitigated_incidents = mit_res.scalar() or 0
     
@@ -314,7 +314,7 @@ async def get_summary_kpis(
     # 4. Network Uptime
     agents_stmt = text(f"""
         SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE status = 'active') as active 
-        FROM client_{company_slug}.sentinel_agents
+        FROM "client_{company_slug}".sentinel_agents
     """)
     agents_res = await db.execute(agents_stmt)
     agents_row = agents_res.fetchone()
@@ -370,12 +370,12 @@ async def list_nodes_inventory(
             a.status as agent_status,
             (
                 SELECT COUNT(*) 
-                FROM client_{company_slug}.tamper_alerts ta
+                FROM "client_{company_slug}".tamper_alerts ta
                 WHERE ta.server_id = s.id 
-                  AND ta.id NOT IN (SELECT alert_id FROM client_{company_slug}.alert_mitigations)
+                  AND ta.id NOT IN (SELECT alert_id FROM "client_{company_slug}".alert_mitigations)
             ) as threats
-        FROM client_{company_slug}.sentinel_agents a
-        JOIN client_{company_slug}.servers s ON s.id = a.server_id
+        FROM "client_{company_slug}".sentinel_agents a
+        JOIN "client_{company_slug}".servers s ON s.id = a.server_id
         ORDER BY s.hostname ASC
     """
     result = await db.execute(text(sql))
@@ -456,12 +456,12 @@ async def get_detections_heatmap(
             p.name as project_name,
             (
                 SELECT COUNT(*) 
-                FROM client_{company_slug}.tamper_alerts ta
+                FROM "client_{company_slug}".tamper_alerts ta
                 WHERE ta.server_id = s.id 
-                  AND ta.id NOT IN (SELECT alert_id FROM client_{company_slug}.alert_mitigations)
+                  AND ta.id NOT IN (SELECT alert_id FROM "client_{company_slug}".alert_mitigations)
             ) as threats
-        FROM client_{company_slug}.servers s
-        JOIN client_{company_slug}.projects p ON p.id = s.project_id
+        FROM "client_{company_slug}".servers s
+        JOIN "client_{company_slug}".projects p ON p.id = s.project_id
         ORDER BY s.location ASC, p.name ASC, s.hostname ASC
     """
     res = await db.execute(text(sql))
@@ -517,7 +517,7 @@ async def generate_join_token(
     await set_tenant_search_path(db, company_slug)
     
     # Check server exists
-    server_stmt = text(f"SELECT id FROM client_{company_slug}.servers WHERE id = :server_id LIMIT 1")
+    server_stmt = text(f"SELECT id FROM \"client_{company_slug}\".servers WHERE id = :server_id LIMIT 1")
     res = await db.execute(server_stmt, {"server_id": payload.server_id})
     server = res.fetchone()
     if not server:
@@ -558,7 +558,7 @@ async def verify_server_registration(
         
     await set_tenant_search_path(db, company_slug)
     
-    agent_stmt = text(f"SELECT id, status FROM client_{company_slug}.sentinel_agents WHERE server_id = :server_id LIMIT 1")
+    agent_stmt = text(f"SELECT id, status FROM \"client_{company_slug}\".sentinel_agents WHERE server_id = :server_id LIMIT 1")
     res = await db.execute(agent_stmt, {"server_id": payload.server_id})
     agent = res.fetchone()
     
@@ -595,24 +595,24 @@ async def export_telemetry_csv(
             s.status as server_status,
             (
                 SELECT COUNT(*) 
-                FROM client_{company_slug}.tamper_alerts ta
+                FROM "client_{company_slug}".tamper_alerts ta
                 WHERE ta.server_id = s.id 
                   AND ta.severity = 'critical'
-                  AND ta.id NOT IN (SELECT alert_id FROM client_{company_slug}.alert_mitigations)
+                  AND ta.id NOT IN (SELECT alert_id FROM "client_{company_slug}".alert_mitigations)
             ) as critical_alerts,
             (
                 SELECT COUNT(*) 
-                FROM client_{company_slug}.alert_mitigations am
-                JOIN client_{company_slug}.tamper_alerts ta ON ta.id = am.alert_id
+                FROM "client_{company_slug}".alert_mitigations am
+                JOIN "client_{company_slug}".tamper_alerts ta ON ta.id = am.alert_id
                 WHERE ta.server_id = s.id
             ) as mitigated_incidents
-        FROM client_{company_slug}.servers s
+        FROM "client_{company_slug}".servers s
         ORDER BY s.hostname ASC
     """
     res = await db.execute(text(sql))
     rows = res.fetchall()
     
-    agents_sql = f"SELECT id, server_id FROM client_{company_slug}.sentinel_agents"
+    agents_sql = f"SELECT id, server_id FROM \"client_{company_slug}\".sentinel_agents"
     agents_res = await db.execute(text(agents_sql))
     agents_rows = agents_res.fetchall()
     server_agent_map = {str(a.server_id): str(a.id) for a in agents_rows}

@@ -1,0 +1,63 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:14-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-canarydb}
+      POSTGRES_USER: ${POSTGRES_USER:-canary_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./database/migrations/001_multi_tenant_onboarding.sql:/docker-entrypoint-initdb.d/01-multi_tenant.sql
+      - ./database/scripts/seed_mock_data.sql:/docker-entrypoint-initdb.d/02-seed_mock_data.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-canary_admin} -d ${POSTGRES_DB:-canarydb}"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--notify-keyspace-events", "Ex"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  platform-service:
+    build:
+      context: ./src/platform_service
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-canary_admin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-canarydb}"
+      REDIS_URL: "redis://redis:6379/0"
+      JWT_SECRET: ${JWT_SECRET}
+      BOOTSTRAP_JWT_SECRET: ${BOOTSTRAP_JWT_SECRET}
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-admin@cadoc.io}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD}
+      ENABLE_RATE_LIMIT: "true"
+      PROJECT_NAME: "Cadoc Platform (B1 Free Tier)"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src/platform_service:/app
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx/azure-b1.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/certs:/etc/nginx/certs:ro
+    depends_on:
+      - platform-service
+
+volumes:
+  postgres-data:

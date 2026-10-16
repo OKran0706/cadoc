@@ -403,8 +403,14 @@ async def test_onboarding_verification():
 
 
 @pytest.mark.asyncio
-async def test_csv_export():
+async def test_csv_export(monkeypatch):
     mock_db.reset_mock()
+    
+    mock_redis = AsyncMock()
+    mock_redis.get = AsyncMock(return_value=None)
+    mock_redis.close = AsyncMock()
+    import redis.asyncio as aioredis
+    monkeypatch.setattr(aioredis, "from_url", lambda url, **kwargs: mock_redis)
     
     # Mock server listing database query
     mock_row_1 = MagicMock(
