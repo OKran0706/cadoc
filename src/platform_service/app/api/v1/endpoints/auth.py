@@ -4,6 +4,7 @@ from sqlalchemy import text
 from pydantic import BaseModel
 import jwt
 import time
+import re
 import redis.asyncio as redis
 from app.core.database import get_db_session
 from app.core.security import verify_password
@@ -49,7 +50,6 @@ async def login(req: LoginRequest, request: Request, db: AsyncSession = Depends(
             # Gracefully fail-open if Redis is down
             pass
 
-    # Authenticate user depending on the scope
     if req.company_slug == "global":
         result = await db.execute(
             text("SELECT id, email, display_name, password_hash FROM public.global_admins WHERE email = :email AND status = 'active'"),
@@ -58,9 +58,13 @@ async def login(req: LoginRequest, request: Request, db: AsyncSession = Depends(
         user = result.fetchone()
     else:
         from app.core.database import set_tenant_search_path
-        await set_tenant_search_path(db, req.company_slug)
+        clean_slug = req.company_slug.strip()
+        if not re.match(r"^[a-zA-Z0-9_-]+$", clean_slug):
+            raise HTTPException(status_code=400, detail="Invalid company slug")
+
+        await set_tenant_search_path(db, clean_slug)
         result = await db.execute(
-            text("SELECT id, email, display_name, password_hash FROM users WHERE email = :email"),
+            text(f'SELECT id, email, display_name, password_hash FROM "client_{clean_slug}".users WHERE email = :email'),
             {"email": req.email}
         )
         user = result.fetchone()

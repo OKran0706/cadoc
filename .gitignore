@@ -25,3 +25,6 @@ venv/
 .venv
 *.log
 
+*.pem
+*.tar.gz
+cadoc-deploy.tar.gz

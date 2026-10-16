@@ -95,20 +95,23 @@ SET permissions = EXCLUDED.permissions;
 
 INSERT INTO users (email, display_name, password_hash)
 VALUES
-    ('alice@mock-acme.example', 'Alice Admin',    '$2b$12$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'),
-    ('bob@mock-acme.example',   'Bob Analyst',    '$2b$12$BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'),
-    ('carol@mock-acme.example', 'Carol Readonly', '$2b$12$CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC')
+    ('alice@mock-acme.example', 'Alice Admin',    '$2b$12$/gTNls8RmuMw1Sa1yh5zgOL0EA3MLlccC6SbqLz/JvI1tg3.TwLga'),
+    ('alice@mock-acme.com',     'Alice Admin',    '$2b$12$/gTNls8RmuMw1Sa1yh5zgOL0EA3MLlccC6SbqLz/JvI1tg3.TwLga'),
+    ('bob@mock-acme.example',   'Bob Analyst',    '$2b$12$/gTNls8RmuMw1Sa1yh5zgOL0EA3MLlccC6SbqLz/JvI1tg3.TwLga'),
+    ('bob@mock-acme.com',       'Bob Analyst',    '$2b$12$/gTNls8RmuMw1Sa1yh5zgOL0EA3MLlccC6SbqLz/JvI1tg3.TwLga'),
+    ('carol@mock-acme.example', 'Carol Readonly', '$2b$12$/gTNls8RmuMw1Sa1yh5zgOL0EA3MLlccC6SbqLz/JvI1tg3.TwLga'),
+    ('carol@mock-acme.com',     'Carol Readonly', '$2b$12$/gTNls8RmuMw1Sa1yh5zgOL0EA3MLlccC6SbqLz/JvI1tg3.TwLga')
 ON CONFLICT (email) DO UPDATE
-SET display_name = EXCLUDED.display_name;
+SET display_name = EXCLUDED.display_name, password_hash = EXCLUDED.password_hash;
 
 -- Assign roles to users
 INSERT INTO user_roles (user_id, role_id)
 SELECT u.id, r.id
 FROM users u
 JOIN roles r ON (
-    (u.email = 'alice@mock-acme.example' AND r.name = 'tenant-admin')
-    OR (u.email = 'bob@mock-acme.example'   AND r.name = 'security-analyst')
-    OR (u.email = 'carol@mock-acme.example' AND r.name = 'read-only')
+    (u.email LIKE 'alice@mock-acme%' AND r.name = 'tenant-admin')
+    OR (u.email LIKE 'bob@mock-acme%'   AND r.name = 'security-analyst')
+    OR (u.email LIKE 'carol@mock-acme%' AND r.name = 'read-only')
 )
 ON CONFLICT (user_id, role_id) DO NOTHING;
 
