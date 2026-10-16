@@ -124,12 +124,16 @@ services:
       PROJECT_NAME: "Cadoc Platform (AWS EC2)"
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://ec2-3-89-18-5.compute-1.amazonaws.com}
       CA_CERT_PATH: /certs/ca.crt
+      KAFKA_BOOTSTRAP_SERVERS: "redpanda:9092"
+      KAFKA_TOPIC: "canary-events"
     volumes:
       - ./deploy/certs:/certs:ro
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      redpanda:
         condition: service_healthy
 
   ingestion-service:

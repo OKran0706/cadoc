@@ -293,6 +293,10 @@ func main() {
 		go func() {
 			defer wg.Done()
 			if err := ipcServer.Start(ctx, "/run/canary/audit.sock", func(event *auditmon.AuditEvent) {
+				// Ignore our own file activity (canary rotation writes/deletes decoys we watch).
+				if event.PID == os.Getpid() {
+					return
+				}
 				log.Printf("[auditmon] Received event from consumer: id=%s path=%s op=%s", event.ID, event.Path, event.Op)
 				// Handler: Sign and ship the audit event
 				log.Printf("[auditmon] Signing event for path=%s", event.Path)

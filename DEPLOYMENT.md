@@ -458,4 +458,5 @@ The installer pins the CA by SHA-256, downloads and verifies the binary, writes 
 ### Known limits
 - Vault runs in dev mode (in-memory): restarting the vault container invalidates all enrolled agents.
 - Browser shows a certificate warning (private CA) until a publicly trusted cert is used for the UI.
-- The installer does not pass `-deployer-profile`, so decoy deployment is off until a profile is configured.
+- Decoys are planted on the host in the profile's real paths (default `app-server`: `/etc/app`, `/var/backups`, `/home/deploy/.ssh`, `/opt/app/config`), rotated every `--interval` (default 600s). Use `--profile` / `--interval` on the installer to change this.
+- Events flow agent -> ingestion -> Kafka `canary-events` -> platform-service `event_writer` -> `canary_decoy_files` / `tamper_alerts` (what the map, decoys and alerts pages read). The writer is at-most-once (no dead-letter queue).

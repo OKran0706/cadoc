@@ -105,13 +105,15 @@ class IngestEnvelope(BaseModel):
     key_id: str      # Public key fingerprint
     hash: str        # Payload hash
 
-async def forward_to_kafka(topic: str, value: str):
+async def forward_to_kafka(topic: str, value: str, identity: str = ""):
     """
     Background task to forward verified event to Kafka.
     """
     try:
         if state.producer:
-            await state.producer.send_and_wait(topic, value.encode("utf-8"))
+            # identity = mTLS-verified {slug}.{sentinel_id}; lets the platform writer attribute the event.
+            headers = [("identity", identity.encode("utf-8"))] if identity else None
+            await state.producer.send_and_wait(topic, value.encode("utf-8"), headers=headers)
             logger.debug(f"KAFKA_FORWARD_SUCCESS: topic={topic}")
     except Exception as e:
         logger.error(f"KAFKA_FORWARD_FAILED: {e}")
@@ -179,7 +181,7 @@ async def handle_ingest(
         logger.info(f"HEARTBEAT_INGESTED: {company_slug}/{resolved_sentinel_id}")
     else:
         # Asynchronous-path forwarding (Kafka)
-        background_tasks.add_task(forward_to_kafka, KAFKA_TOPIC, envelope.payload)
+        background_tasks.add_task(forward_to_kafka, KAFKA_TOPIC, envelope.payload, cert_id)
         logger.info(f"EVENT_QUEUED: type={event_type} sentinel={sentinel_id}")
 
     return {"status": "accepted", "type": event_type}

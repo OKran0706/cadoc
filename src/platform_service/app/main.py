@@ -6,11 +6,13 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.api.v1.endpoints import auth, onboarding, bootstrap, dashboard, keys, decoys, agents, admins, projects, servers
 from app.services.liveness import listen_redis_heartbeat_expirations
+from app.services.event_writer import run_event_writer
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Launch the async Redis Keyspace expiration observer task
     liveness_task = asyncio.create_task(listen_redis_heartbeat_expirations())
+    writer_task = asyncio.create_task(run_event_writer())
     
     # Run dynamic admin bootstrapping if env vars are present
     if settings.INITIAL_ADMIN_EMAIL and settings.INITIAL_ADMIN_PASSWORD:
@@ -63,7 +65,8 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown: Cancel background tasks
     liveness_task.cancel()
-    await asyncio.gather(liveness_task, return_exceptions=True)
+    writer_task.cancel()
+    await asyncio.gather(liveness_task, writer_task, return_exceptions=True)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,

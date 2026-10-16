@@ -5,6 +5,7 @@ After=network-online.target auditd.service
 Wants=network-online.target
 
 [Service]
+EnvironmentFile=-/etc/canary/sentinel.env
 ExecStartPre=/usr/bin/mkdir -p /run/canary
 ExecStartPre=/usr/bin/chmod 700 /run/canary
 ExecStart=/opt/canary/sentinel

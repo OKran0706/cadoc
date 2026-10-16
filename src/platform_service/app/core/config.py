@@ -36,6 +36,10 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("INITIAL_ADMIN_PASSWORD")
     )
 
+    # Kafka (sentinel events -> Postgres writer). Writer is disabled when unset.
+    KAFKA_BOOTSTRAP_SERVERS: str = Field("", validation_alias=AliasChoices("KAFKA_BOOTSTRAP_SERVERS"))
+    KAFKA_TOPIC: str = Field("canary-events", validation_alias=AliasChoices("KAFKA_TOPIC"))
+
     # Public origin agents use for download, bootstrap and ingest (single port 443).
     PUBLIC_BASE_URL: str = Field(
         "https://ec2-3-89-18-5.compute-1.amazonaws.com",
