@@ -29,7 +29,6 @@ func StartDaemon(ctx context.Context, profileName, configDir, templateDir string
 	log.Printf("Canary Deployer Daemon started (Profile: %s, Mode: In-Memory)", profileName)
 
 	// 1. One-time brute-force cleanup on startup to remove orphans from previous runs
-	MarkBusy(10 * time.Second) // our own file activity must not raise tamper alerts
 	log.Println("Deployer Daemon: performing startup cleanup of orphaned canaries...")
 	removeOldCanariesBruteForce(profile)
 
@@ -42,7 +41,6 @@ func StartDaemon(ctx context.Context, profileName, configDir, templateDir string
 			return
 		default:
 			// 3. Deploy New Canaries
-			MarkBusy(10 * time.Second)
 			newCanaries, err := deployer.Deploy(profile, templateDir, false)
 			if err != nil {
 				log.Printf("Deployer Daemon: error during deployment: %v — keeping existing canaries", err)
@@ -86,7 +84,6 @@ func StartDaemon(ctx context.Context, profileName, configDir, templateDir string
 				}
 			}
 
-			MarkBusy(5 * time.Second)
 			// 5. Sleep with Jitter
 			jitter, err := rand.Int(rand.Reader, big.NewInt(int64(maxJitterSec)))
 			var sleepDur time.Duration

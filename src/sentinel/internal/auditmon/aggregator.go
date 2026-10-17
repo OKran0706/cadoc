@@ -6,6 +6,8 @@ package auditmon
 import (
 	"fmt"
 	"log"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -67,6 +69,7 @@ type Aggregator struct {
 	emitChan   chan *AuditEvent
 	stopChan   chan struct{}
 	canaryMap  map[string]bool // Thread-safe set of paths to monitor
+	emitted    map[string]time.Time // recently emitted audit IDs: late fragments of them are dropped
 }
 
 // NewAggregator creates a new stateful audit aggregator.
@@ -74,6 +77,7 @@ func NewAggregator(timeout time.Duration, maxBuffers int, emitChanSize int) *Agg
 	a := &Aggregator{
 		buffers:    make(map[string]*eventBuffer),
 		canaryMap:  make(map[string]bool),
+		emitted:    make(map[string]time.Time),
 		timeout:    timeout,
 		maxBuffers: maxBuffers,
 		emitChan:   make(chan *AuditEvent, emitChanSize),
@@ -110,6 +114,12 @@ func (a *Aggregator) ProcessRecord(rec *auparse.AuditMessage) {
 
 	// Key: AuditID (it's unique per event across all processes/threads)
 	key := auditID
+
+	// Trailing records (PROCTITLE, extra PATH items) of an event we already emitted would otherwise
+	// start a new, syscall-less buffer and be flushed later as a duplicate PID-less partial event.
+	if _, done := a.emitted[key]; done {
+		return
+	}
 
 	buf, ok := a.buffers[key]
 	if !ok {
@@ -151,6 +161,8 @@ func (a *Aggregator) ProcessRecord(rec *auparse.AuditMessage) {
 	case 1300: // AUDIT_SYSCALL
 		buf.syscall = rec
 		buf.syscallFields = fields
+		fmt.Sscanf(fields["pid"], "%d", &buf.pid)
+		fmt.Sscanf(fields["tid"], "%d", &buf.tid)
 	case 1302: // AUDIT_PATH
 		buf.paths = append(buf.paths, rec)
 		buf.pathsFields = append(buf.pathsFields, fields)
@@ -193,14 +205,35 @@ func (a *Aggregator) isComplete(buf *eventBuffer) bool {
 
 	// 13.2.3: Worker-side filtering
 	// Check if any of the paths are in our Canary Map
+	_, ok := a.matchedCanaryPath(buf)
+	return ok
+}
+
+// absPath resolves a PATH record name against the event's CWD. auditd logs the name as the process
+// passed it, so `cd /etc/app && cat config.yml.old` records a relative name.
+func absPath(name, cwd string) string {
+	name = strings.Trim(name, "\"")
+	if name == "" {
+		return ""
+	}
+	if !filepath.IsAbs(name) {
+		if cwd == "" {
+			return name
+		}
+		name = filepath.Join(cwd, name)
+	}
+	return filepath.Clean(name)
+}
+
+// matchedCanaryPath returns the first PATH record of buf (resolved to an absolute path) that is a canary.
+func (a *Aggregator) matchedCanaryPath(buf *eventBuffer) (string, bool) {
+	cwd := strings.Trim(buf.cwdFields["cwd"], "\"")
 	for _, fields := range buf.pathsFields {
-		path := strings.Trim(fields["name"], "\"")
-		if a.canaryMap[path] {
-			return true
+		if p := absPath(fields["name"], cwd); a.canaryMap[p] {
+			return p, true
 		}
 	}
-
-	return false
+	return "", false
 }
 
 func (a *Aggregator) emit(key string) {
@@ -209,12 +242,14 @@ func (a *Aggregator) emit(key string) {
 		return
 	}
 	delete(a.buffers, key)
+	a.emitted[key] = time.Now()
 
 	event := &AuditEvent{
 		ID:         buf.id,
 		Timestamp:  buf.ts,
 		Confidence: ConfComplete,
 	}
+	cwd := strings.Trim(buf.cwdFields["cwd"], "\"")
 
 	// 1. Extract from SYSCALL record
 	if buf.syscall != nil {
@@ -227,9 +262,7 @@ func (a *Aggregator) emit(key string) {
 		if tidVal, ok := fields["tid"]; ok {
 			fmt.Sscanf(tidVal, "%d", &event.TID)
 		}
-		var sys int
-		fmt.Sscanf(fields["syscall"], "%d", &sys)
-		event.Op = identifyOp(sys)
+		event.Op = opFor(fields)
 	}
 
 	// 2. Extract from PATH records
@@ -240,25 +273,18 @@ func (a *Aggregator) emit(key string) {
 			for _, fields := range buf.pathsFields {
 				item := fields["item"]
 				if item == "2" {
-					event.Path = strings.Trim(fields["name"], "\"")
+					event.Path = absPath(fields["name"], cwd)
 				} else if item == "3" {
-					event.DestPath = strings.Trim(fields["name"], "\"")
+					event.DestPath = absPath(fields["name"], cwd)
 				}
 			}
 		} else {
 			// Fallback to the first path that matches a canary, or the last path record.
-			var path string
-			for _, fields := range buf.pathsFields {
-				p := strings.Trim(fields["name"], "\"")
-				if a.canaryMap[p] {
-					path = p
-					break
-				}
-			}
+			path, _ := a.matchedCanaryPath(buf)
 			if path == "" {
 				// Last record often contains the actual file acted upon
 				lastFields := buf.pathsFields[len(buf.pathsFields)-1]
-				path = strings.Trim(lastFields["name"], "\"")
+				path = absPath(lastFields["name"], cwd)
 			}
 			event.Path = path
 		}
@@ -294,6 +320,12 @@ func (a *Aggregator) janitor() {
 func (a *Aggregator) checkTimeouts() {
 	a.mu.Lock()
 	now := time.Now()
+	// Keep emitted IDs long enough to swallow late fragments (a few timeouts), then forget them.
+	for id, at := range a.emitted {
+		if now.Sub(at) > 4*a.timeout+10*time.Second {
+			delete(a.emitted, id)
+		}
+	}
 	var toEmit []string
 	for key, buf := range a.buffers {
 		if now.Sub(buf.lastUpdate) > a.timeout {
@@ -314,23 +346,16 @@ func (a *Aggregator) emitPartialUnlocked(key string) {
 		return
 	}
 	delete(a.buffers, key)
+	a.emitted[key] = time.Now()
 
 	// C-02: Gate partial events on canaryMap (same requirement as isComplete).
 	if len(buf.paths) == 0 {
 		return
 	}
 
-	var path string
-	for _, fields := range buf.pathsFields {
-		p := strings.Trim(fields["name"], "\"")
-		if a.canaryMap[p] {
-			path = p
-			break
-		}
-	}
-
 	// Nothing to emit if path not in canary map
-	if path == "" {
+	path, ok := a.matchedCanaryPath(buf)
+	if !ok {
 		return
 	}
 
@@ -338,6 +363,7 @@ func (a *Aggregator) emitPartialUnlocked(key string) {
 		ID:         buf.id,
 		Timestamp:  buf.ts,
 		PID:        buf.pid,
+		TID:        buf.tid,
 		Confidence: ConfIncomplete,
 		Path:       path,
 	}
@@ -346,9 +372,7 @@ func (a *Aggregator) emitPartialUnlocked(key string) {
 		fmt.Sscanf(fields["uid"], "%d", &event.UID)
 		event.Comm = strings.Trim(fields["comm"], "\"")
 		event.Exe = strings.Trim(fields["exe"], "\"")
-		var sys int
-		fmt.Sscanf(fields["syscall"], "%d", &sys)
-		event.Op = identifyOp(sys)
+		event.Op = opFor(fields)
 	}
 	select {
 	case a.emitChan <- event:
@@ -407,6 +431,56 @@ func (a *Aggregator) evictOldest() {
 // Events returns the channel for completed audit events.
 func (a *Aggregator) Events() <-chan *AuditEvent {
 	return a.emitChan
+}
+
+// opFor classifies a SYSCALL record. auparse's Data() yields the syscall as a NAME ("openat") for
+// known architectures, so a numeric Sscanf silently produced 0 (= READ) for every event. Names are
+// handled first (architecture independent); a bare number falls back to the x86_64 table.
+func opFor(fields map[string]string) string {
+	sc := fields["syscall"]
+	if n, err := strconv.Atoi(sc); err == nil {
+		return identifyOp(n)
+	}
+	switch sc {
+	case "read", "pread64", "readv", "preadv", "preadv2":
+		return "READ"
+	case "write", "pwrite64", "writev", "pwritev", "pwritev2", "creat":
+		return "WRITE"
+	case "open": // open(path, flags, mode)
+		return openOp(fields["a1"])
+	case "openat": // openat(dirfd, path, flags, mode)
+		return openOp(fields["a2"])
+	case "openat2": // flags live behind a struct pointer; cannot tell read from write
+		return "OPEN"
+	case "rename", "renameat", "renameat2":
+		return "RENAME"
+	case "unlink", "unlinkat", "rmdir":
+		return "DELETE"
+	case "chmod", "fchmod", "fchmodat", "fchmodat2":
+		return "CHMOD"
+	case "chown", "fchown", "lchown", "fchownat":
+		return "CHOWN"
+	case "truncate", "ftruncate":
+		return "TRUNCATE"
+	case "symlink", "symlinkat":
+		return "SYMLINK"
+	case "link", "linkat":
+		return "LINK"
+	case "mknod", "mknodat":
+		return "MKNOD"
+	}
+	return "OTHER"
+}
+
+// openOp tells a read-only open (OPEN) from one that can modify the file (WRITE). Flag values for
+// these bits are the same on x86_64 and arm64.
+func openOp(flagsHex string) string {
+	const wrBits = 0x1 | 0x2 | 0x40 | 0x200 | 0x400 // O_WRONLY|O_RDWR|O_CREAT|O_TRUNC|O_APPEND
+	flags, err := strconv.ParseUint(flagsHex, 16, 64)
+	if err != nil || flags&wrBits == 0 {
+		return "OPEN"
+	}
+	return "WRITE"
 }
 
 // identifyOp maps a syscall number to a high-level operation name.

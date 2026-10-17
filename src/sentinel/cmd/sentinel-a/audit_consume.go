@@ -24,8 +24,8 @@ import (
 func runAuditConsumer() {
 	log.Println("[audit-consume] Starting audispd plugin worker...")
 
-	// 1. Initialize Aggregator with 2s timeout, 10k buffers, and 5k channel capacity
-	agg := auditmon.NewAggregator(2*time.Second, 10000, 5000)
+	// 1. Initialize Aggregator with 5s timeout, 10k buffers, and 5k channel capacity
+	agg := auditmon.NewAggregator(5*time.Second, 10000, 5000)
 
 	// 2. Start Stdin consumer in background
 	go func() {
