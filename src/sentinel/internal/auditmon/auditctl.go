@@ -74,8 +74,7 @@ func (m *AuditctlManager) ClearAll() error {
 		}
 		
 		// Safely construct the delete command without shell parsing
-		args := append([]string{"-d"}, strings.Fields(line)...)
-		delCmd := exec.Command("auditctl", args...)
+		delCmd := exec.Command("auditctl", deleteArgs(line)...)
 		if delOut, delErr := delCmd.CombinedOutput(); delErr != nil {
 			log.Printf("[auditmon] Warning: failed to delete rule '%s': %v (output: %s)", line, delErr, string(delOut))
 		}
@@ -83,6 +82,18 @@ func (m *AuditctlManager) ClearAll() error {
 
 	log.Printf("[auditmon] All live rules for key %s cleared", m.key)
 	return nil
+}
+
+// deleteArgs turns a rule line from `auditctl -l` into the auditctl arguments that delete it.
+// Watch rules ("-w <path> -p rwa -k key") are deleted with -W; "-d" only accepts syscall rules
+// ("-a always,exit ...") and rejects a watch with "bad keyword -w".
+func deleteArgs(line string) []string {
+	fields := strings.Fields(line)
+	if len(fields) > 0 && fields[0] == "-w" {
+		fields[0] = "-W"
+		return fields
+	}
+	return append([]string{"-d"}, fields...)
 }
 
 func validatePath(path string) error {

@@ -11,7 +11,6 @@ import (
 	"net"
 	"strings"
 	"sync"
-	"time"
 	"github.com/your-org/canary/sentinel/internal/sysutil"
 )
 
@@ -66,7 +65,7 @@ func (s *Server) Start(ctx context.Context, socketPath string, handler func(even
 				log.Printf("[auditmon] Replayed canary map to new worker (%d bytes)", len(payload))
 			}
 			s.workersMu.Unlock()
-			go handleConnection(ctx, conn, handler)
+			go s.handleConnection(ctx, conn, handler)
 		}
 	}()
 
@@ -96,12 +95,20 @@ func (s *Server) BroadcastControlMessage(msg string) {
 	}
 }
 
-func handleConnection(ctx context.Context, conn net.Conn, handler func(event *AuditEvent)) {
+func (s *Server) handleConnection(ctx context.Context, conn net.Conn, handler func(event *AuditEvent)) {
 	log.Printf("[auditmon-debug] New connection from consumer: %v", conn.RemoteAddr())
-	defer conn.Close()
+	defer func() {
+		// Forget the worker, or every later broadcast logs a "closed network connection" error per dead peer.
+		s.workersMu.Lock()
+		delete(s.workers, conn)
+		s.workersMu.Unlock()
+		conn.Close()
+	}()
 	scanner := bufio.NewScanner(conn)
+	// No read deadline: an idle consumer is normal (no decoy touched). The old 30s deadline made the
+	// server drop a healthy consumer every 30s, and an event written during that reconnect was lost.
+	// A dead peer shows up as EOF on a unix socket, so no timeout is needed.
 	for {
-		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 		if !scanner.Scan() {
 			break
 		}
