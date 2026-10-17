@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from pydantic import BaseModel
 from typing import Optional, List
+from uuid import UUID
 import re
 from app.core.database import get_db_session, set_tenant_search_path
 from app.core.security import RequirePermission
@@ -24,11 +25,12 @@ class DecoyResponse(BaseModel):
 @router.get("/", response_model=List[DecoyResponse])
 async def list_decoys(
     status: Optional[str] = Query(None),
+    server_id: Optional[UUID] = Query(None, description="Only decoys planted on this server"),
     db: AsyncSession = Depends(get_db_session),
     admin: dict = Depends(RequirePermission("security.read"))
 ):
     """
-    Exposes read-only, schema-isolated listings of active canary decoy files.
+    Exposes read-only, schema-isolated listings of canary decoy files, optionally for one server.
     """
     company_slug = admin["company_slug"]
     if company_slug == "global":
@@ -43,13 +45,17 @@ async def list_decoys(
     
     # 3. Dynamic filter building
     params = {}
-    where_clause = ""
+    conditions = []
     if status:
         allowed_statuses = {'planted', 'tampered', 'cleaned_up', 'verification_failed'}
         if status not in allowed_statuses:
             raise HTTPException(status_code=400, detail=f"Invalid status filter. Must be one of {allowed_statuses}")
-        where_clause = "WHERE status = :status"
+        conditions.append("status = :status")
         params["status"] = status
+    if server_id:
+        conditions.append("server_id = CAST(:server_id AS uuid)")
+        params["server_id"] = str(server_id)
+    where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
         
     sql = f"""
         SELECT id, server_id, file_path, decoy_type, original_hash, status,

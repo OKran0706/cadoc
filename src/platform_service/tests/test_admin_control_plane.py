@@ -310,3 +310,22 @@ async def test_login_rate_limiter_blocks_when_enabled(monkeypatch):
         })
         assert response.status_code == 429
         assert "Too many failed login attempts" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_decoys_server_filter_binds_uuid_and_composes_with_status():
+    local_mock_db.reset_mock()
+    sid = "34d0222e-5f7b-4b7f-b1be-023377ec8f8f"
+    local_mock_db.execute.side_effect = None
+    local_mock_db.execute.return_value = MagicMock(
+        fetchone=MagicMock(return_value=MagicMock(id="tenant-uuid-123")),
+        fetchall=MagicMock(return_value=[]), scalar=MagicMock(return_value="client_client-a"))
+    headers = get_auth_headers("client-a")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as ac:
+        bad = await ac.get("/api/v1/decoys/?server_id=not-a-uuid", headers=headers)
+        ok = await ac.get(f"/api/v1/decoys/?server_id={sid}&status=planted", headers=headers)
+    assert bad.status_code == 422  # never reaches SQL
+    assert ok.status_code == 200
+    q = [c for c in local_mock_db.execute.call_args_list if "canary_decoy_files" in str(c.args[0])][-1]
+    assert "status = :status AND server_id = CAST(:server_id AS uuid)" in str(q.args[0])
+    assert q.args[1] == {"status": "planted", "server_id": sid}
