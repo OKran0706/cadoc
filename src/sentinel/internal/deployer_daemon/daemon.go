@@ -46,9 +46,7 @@ func StartDaemon(ctx context.Context, profileName, configDir, templateDir string
 				log.Printf("Deployer Daemon: error during deployment: %v — keeping existing canaries", err)
 			} else {
 				// 2. Remove previous canaries using in-memory state only after successful deploy
-				for _, c := range activeCanaries {
-					_ = os.Remove(c.Path)
-				}
+				removeStale(activeCanaries, newCanaries)
 				activeCanaries = newCanaries
 
 				// 4. Build and Emit the Map Event
@@ -98,6 +96,20 @@ func StartDaemon(ctx context.Context, profileName, configDir, templateDir string
 			case <-ctx.Done():
 				return
 			}
+		}
+	}
+}
+
+// removeStale deletes previous canaries whose path is not reused by the new set. Deploy
+// overwrites a reused path in place, so removing it afterwards would delete the fresh decoy.
+func removeStale(old, fresh []deployer.CanaryEntry) {
+	keep := make(map[string]bool, len(fresh))
+	for _, c := range fresh {
+		keep[c.Path] = true
+	}
+	for _, c := range old {
+		if !keep[c.Path] {
+			_ = os.Remove(c.Path)
 		}
 	}
 }
