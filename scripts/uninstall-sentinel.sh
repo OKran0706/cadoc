@@ -46,6 +46,14 @@ run() {
   "$@" || { warn "failed: $*"; return 1; }
 }
 
+# try: best-effort command whose failure is expected and harmless (e.g. pkill with nothing to kill,
+# systemctl reset-failed on a clean unit). Never flags a warning.
+try() {
+  if [ "$DRY_RUN" -eq 1 ]; then printf '    (dry-run) %s
+' "$*"; return 0; fi
+  "$@" >/dev/null 2>&1 || true
+}
+
 if [ "$DRY_RUN" -eq 0 ] && [ "$(id -u)" -ne 0 ]; then
   echo "ERROR: run as root (use sudo), or pass --dry-run." >&2; exit 1
 fi
@@ -73,22 +81,22 @@ if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
   fi
   [ -f "$UNIT" ] && run rm -f "$UNIT"
   run systemctl daemon-reload
-  run systemctl reset-failed sentinel.service 2>/dev/null
+  try systemctl reset-failed sentinel.service
 else
   # No systemd: stop by pidfile, then by name.
-  if [ -f "$PIDFILE" ]; then run kill "$(cat "$PIDFILE")" 2>/dev/null; fi
+  if [ -f "$PIDFILE" ]; then try kill "$(cat "$PIDFILE")"; fi
   [ -f "$UNIT" ] && run rm -f "$UNIT"
 fi
 # The agent also runs as an auditd plugin process; make sure nothing is left.
-run pkill -f "${INSTALL_DIR}/sentinel" 2>/dev/null || true
+try pkill -f "${INSTALL_DIR}/sentinel"
 
 # --- 2. Auditd plugin ---
 say "Removing the auditd plugin..."
 for p in $PLUGIN_FILES; do [ -e "$p" ] && run rm -f "$p"; done
 # auditd re-reads plugins on SIGHUP; this drops our plugin without restarting auditd
 # (RHEL-family units refuse 'service auditd restart').
-if pidof auditd >/dev/null 2>&1; then run kill -HUP "$(pidof auditd | awk '{print $1}')" 2>/dev/null; fi
-run pkill -f "${INSTALL_DIR}/sentinel audit-consume" 2>/dev/null || true
+if pidof auditd >/dev/null 2>&1; then try kill -HUP "$(pidof auditd | awk '{print $1}')"; fi
+try pkill -f "${INSTALL_DIR}/sentinel audit-consume"
 
 # --- 3. Audit rules: persisted file, then any live rule carrying one of our keys ---
 say "Removing Canary audit rules..."
