@@ -38,8 +38,25 @@ for c in curl tar sha256sum openssl systemctl; do
   command -v "$c" >/dev/null 2>&1 || { echo "ERROR: required command not found: $c" >&2; exit 1; }
 done
 
+# An existing enrollment is only reusable if it belongs to THIS client id. Re-running the
+# installer for a different identity (e.g. the same machine registered again) must enroll afresh;
+# otherwise the new join token is dropped and the agent keeps renewing with the old identity.
 ALREADY_PROVISIONED=0
-[ -f "${STATE_DIR}/mtls.crt" ] && ALREADY_PROVISIONED=1
+if [ -f "${STATE_DIR}/mtls.crt" ]; then
+  ENROLLED_ID="$(openssl x509 -in "${STATE_DIR}/mtls.crt" -noout -subject 2>/dev/null | sed -n 's/.*CN *= *\([^,\/]*\).*/\1/p')"
+  ENROLLED_ID="${ENROLLED_ID%.canary.local}"
+  if [ "$ENROLLED_ID" = "$CLIENT_ID" ]; then
+    ALREADY_PROVISIONED=1
+  elif [ -n "$TOKEN" ]; then
+    STALE="${STATE_DIR}.stale-$(date +%s)"
+    echo "[*] Existing enrollment (${ENROLLED_ID:-unknown}) differs from ${CLIENT_ID}; keeping it at ${STALE} and enrolling afresh."
+    systemctl stop sentinel.service 2>/dev/null || true
+    mv "$STATE_DIR" "$STALE"
+  else
+    echo "ERROR: this host is enrolled as '${ENROLLED_ID:-unknown}', not '${CLIENT_ID}'. Supply --token to enroll as the new identity." >&2
+    exit 2
+  fi
+fi
 if [ "$ALREADY_PROVISIONED" -eq 0 ] && [ -z "$TOKEN" ]; then
   echo "ERROR: --token is required for first-time enrollment." >&2; exit 2
 fi

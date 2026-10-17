@@ -7,7 +7,7 @@ Consumes `canary-events` (messages tagged with an `identity` header = mTLS-verif
   - SENTINEL_FILE_*              -> tamper_alerts (DECOY_TAMPER) + decoy status 'tampered'
   - BINARY_TAMPERED, ALERT_*     -> tamper_alerts (BINARY_TAMPER / SYSTEM_INTEGRITY_FAIL)
   - CANARY_CLEANUP               -> decoy status 'cleaned_up' (sentinel removed leftover canaries)
-  - SENTINEL_FINGERPRINT         -> servers.fingerprint; merges a re-added server into its earlier record (alias)
+  - SENTINEL_FINGERPRINT         -> servers.fingerprint; merges a re-added server into its earlier record (alias) + records a SERVER_READDED notice
 Everything else is ignored.
 
 ponytail: at-most-once, no dead-letter queue; a failed message is logged and skipped.
@@ -32,6 +32,15 @@ _ID_PART = re.compile(r"^[A-Za-z0-9_-]+$")
 _HEX64 = re.compile(r"^[A-Fa-f0-9]{64}$")
 _UUID = re.compile(r"^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
 _MAX_CLEANUP_IDS = 1000
+
+# Informational notices (low severity) recorded when a machine is registered again. They never
+# block enrollment or deployment.
+_READDED_MERGED = ("This machine was registered before (previous server re-added). The previous server "
+                   "record was kept and updated with the new details; leftover canaries are being cleaned up.")
+_READDED_ACTIVE = ("This machine was registered before (previous server re-added), but the previous "
+                   "server's agent is still active, so both records were kept.")
+_READDED_HAS_ALERTS = ("This machine was registered before (previous server re-added), but the new server "
+                       "already has alerts, so the records were not merged.")
 
 # Same split as ingestion_service.liveness.parse_agent_cn ({slug}.{sentinel_id}).
 def parse_identity(identity: str) -> Optional[tuple]:
@@ -224,25 +233,27 @@ async def _handle_fingerprint(session, slug: str, server_id: str, payload: dict)
                      WHERE id = CAST(:sid AS uuid)"""), {"fp": fp, "sid": server_id})
         return None
     old = str(match.id)
-    details = {"existing_server_id": old, "new_server_id": server_id}
     ts = parse_ts(payload.get("ts"))
+    ids = {"existing_server_id": old, "new_server_id": server_id}
     res = await session.execute(
         text(f"""SELECT 1 FROM "{schema}".sentinel_agents
                  WHERE server_id = CAST(:old AS uuid) AND status NOT IN ('offline', 'decommissioned') LIMIT 1"""),
         {"old": old},
     )
-    if res.fetchone():  # earlier agent still alive: this is a clone, not a re-add
-        details["reason"] = "existing server's agent is still active"
-        return await _insert_alert(session, slug, server_id, "DUPLICATE_FINGERPRINT", "high", details, ts)
+    if res.fetchone():  # earlier agent still alive: keep both records, just note it
+        return await _insert_alert(session, slug, server_id, "SERVER_READDED", "low",
+                                   {**ids, "action": "kept_separate_active", "message": _READDED_ACTIVE}, ts)
     res = await session.execute(
         text(f"""SELECT 1 FROM "{schema}".tamper_alerts WHERE server_id = CAST(:sid AS uuid) LIMIT 1"""),
         {"sid": server_id},
     )
     if res.fetchone():  # alerts are immutable: a server that has any cannot be deleted
-        details["reason"] = "new server already has alerts and cannot be merged"
-        return await _insert_alert(session, slug, server_id, "DUPLICATE_FINGERPRINT", "high", details, ts)
+        return await _insert_alert(session, slug, server_id, "SERVER_READDED", "low",
+                                   {**ids, "action": "kept_separate_has_alerts", "message": _READDED_HAS_ALERTS}, ts)
     await _merge_servers(session, schema, old, server_id, own, fp)
-    return None
+    # the new row is gone, so the notice is recorded on the surviving server
+    return await _insert_alert(session, slug, old, "SERVER_READDED", "low",
+                               {**ids, "action": "merged", "message": _READDED_MERGED}, ts)
 
 
 async def _handle_cleanup(session, slug: str, server_id: str, payload: dict) -> None:

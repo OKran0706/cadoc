@@ -16,6 +16,6 @@ target_directories:
     canary_type: env_file
     count: 1
 
-naming_strategy: contextual
+naming_strategy: ml
 timestamp_strategy: blend
 permission_strategy: inherit

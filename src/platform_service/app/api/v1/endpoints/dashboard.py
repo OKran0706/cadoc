@@ -614,7 +614,15 @@ async def verify_server_registration(
     if not server:
         return VerifyResponse(verified=False, status="not_registered")
 
-    agent_stmt = text(f"SELECT id, status FROM \"client_{company_slug}\".sentinel_agents WHERE server_id = :server_id LIMIT 1")
+    # A re-added machine merged into its earlier record leaves several agent rows on one server
+    # (older ones are 'decommissioned'). Report the live one, not an arbitrary row.
+    agent_stmt = text(f"""
+        SELECT id, status FROM "client_{company_slug}".sentinel_agents
+        WHERE server_id = :server_id
+        ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'degraded' THEN 1 WHEN 'offline' THEN 2 ELSE 3 END,
+                 updated_at DESC
+        LIMIT 1
+    """)
     res = await db.execute(agent_stmt, {"server_id": server.id})
     agent = res.fetchone()
     

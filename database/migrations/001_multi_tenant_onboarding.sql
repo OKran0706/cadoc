@@ -413,7 +413,7 @@ BEGIN
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             PRIMARY KEY (id, detected_at),
-            CONSTRAINT tamper_alerts_event_type_chk CHECK (event_type IN ('DECOY_TAMPER', 'BINARY_TAMPER', 'AUDITD_RULE_DELETED', 'SYSTEM_INTEGRITY_FAIL', 'DUPLICATE_FINGERPRINT')),
+            CONSTRAINT tamper_alerts_event_type_chk CHECK (event_type IN ('DECOY_TAMPER', 'BINARY_TAMPER', 'AUDITD_RULE_DELETED', 'SYSTEM_INTEGRITY_FAIL', 'DUPLICATE_FINGERPRINT', 'SERVER_READDED')),
             CONSTRAINT tamper_alerts_severity_chk CHECK (severity IN ('low', 'medium', 'high', 'critical'))
         ) PARTITION BY RANGE (detected_at)
     $ddl$, v_schema_name, v_schema_name, v_schema_name);

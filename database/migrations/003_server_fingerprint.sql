@@ -1,6 +1,6 @@
 -- Server fingerprint + alias table (a re-added machine is recognised, merged into its earlier
 -- record, and its new sentinel identity aliased to it), plus the 'orphaned' decoy status and
--- 'DUPLICATE_FINGERPRINT' alert type. New tenants get all of this
+-- 'DUPLICATE_FINGERPRINT' / 'SERVER_READDED' alert types. New tenants get all of this
 -- from 001 (provision function). Idempotent.
 DO $$
 DECLARE
@@ -27,6 +27,6 @@ BEGIN
 
         EXECUTE format('ALTER TABLE %I.tamper_alerts DROP CONSTRAINT IF EXISTS tamper_alerts_event_type_chk', s);
         EXECUTE format($c$ALTER TABLE %I.tamper_alerts ADD CONSTRAINT tamper_alerts_event_type_chk
-                          CHECK (event_type IN ('DECOY_TAMPER', 'BINARY_TAMPER', 'AUDITD_RULE_DELETED', 'SYSTEM_INTEGRITY_FAIL', 'DUPLICATE_FINGERPRINT'))$c$, s);
+                          CHECK (event_type IN ('DECOY_TAMPER', 'BINARY_TAMPER', 'AUDITD_RULE_DELETED', 'SYSTEM_INTEGRITY_FAIL', 'DUPLICATE_FINGERPRINT', 'SERVER_READDED'))$c$, s);
     END LOOP;
 END $$;

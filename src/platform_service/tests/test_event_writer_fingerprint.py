@@ -1,4 +1,6 @@
-"""SENTINEL_FINGERPRINT: a re-added server is recognised by its fingerprint. When the earlier
+"""SENTINEL_FINGERPRINT: a re-added server is recognised by its fingerprint and an informational
+SERVER_READDED notice (low severity) is recorded; enrollment and deployment are never blocked.
+When the earlier
 agent is dead and the new server has no alerts yet, the new server row is folded into the
 EARLIER record (its id, project, roles and alert history stay) and the new sentinel identity is
 recorded as an alias of it. tamper_alerts are immutable in the database, so they are never
@@ -98,17 +100,30 @@ def test_first_sighting_stores_fingerprint_only(monkeypatch):
 
 # ---------------------------------------------------------------- match but never safe to merge
 
-def test_live_old_agent_raises_alert_and_does_not_merge(monkeypatch):
+def test_live_old_agent_records_info_notice_and_does_not_merge(monkeypatch):
     s = session(match=True, live=True)
     run(IDENT, fp_event(), s, monkeypatch)
-    alerts = sqls(s, f"INSERT INTO {SCHEMA}.tamper_alerts")
-    assert len(alerts) == 1
-    assert alerts[0][1]["etype"] == "DUPLICATE_FINGERPRINT" and alerts[0][1]["sev"] == "high"
-    d = json.loads(alerts[0][1]["details"])
+    notes = sqls(s, f"INSERT INTO {SCHEMA}.tamper_alerts")
+    assert len(notes) == 1
+    assert notes[0][1]["etype"] == "SERVER_READDED" and notes[0][1]["sev"] == "low"
+    assert notes[0][1]["sid"] == SID
+    d = json.loads(notes[0][1]["details"])
     assert d["existing_server_id"] == OLD and d["new_server_id"] == SID
+    assert d["action"] == "kept_separate_active" and "still active" in d["message"]
     for forbidden in ("DELETE FROM", "SET server_id", "server_aliases", "'orphaned'", "'decommissioned'",
                       "SET hostname", "SET fingerprint"):
         assert not [m for m in mutations(s) if forbidden in m[0]], forbidden
+
+
+def test_notice_never_blocks_or_revokes_the_new_agent(monkeypatch):
+    # When records are kept separate the new agent is left completely alone.
+    for kwargs in ({"live": True}, {"new_has_alerts": True}):
+        s = session(match=True, **kwargs)
+        run(IDENT, fp_event(), s, monkeypatch)
+        touched = [m for m in mutations(s) if m[0].lstrip().upper().startswith(("UPDATE", "DELETE"))
+                   and ("sentinel_agents" in m[0] or "revoke" in m[0].lower())]
+        assert not touched
+        assert not [1 for sql, _ in s.calls if "redis" in sql.lower()]
 
 
 def test_new_server_with_alerts_is_never_deleted(monkeypatch):
@@ -116,8 +131,9 @@ def test_new_server_with_alerts_is_never_deleted(monkeypatch):
     s = session(match=True, new_has_alerts=True)
     run(IDENT, fp_event(), s, monkeypatch)
     alerts = sqls(s, f"INSERT INTO {SCHEMA}.tamper_alerts")
-    assert len(alerts) == 1 and alerts[0][1]["etype"] == "DUPLICATE_FINGERPRINT"
-    assert "alerts" in json.loads(alerts[0][1]["details"])["reason"]
+    assert len(alerts) == 1 and alerts[0][1]["etype"] == "SERVER_READDED" and alerts[0][1]["sev"] == "low"
+    d = json.loads(alerts[0][1]["details"])
+    assert d["action"] == "kept_separate_has_alerts" and "alerts" in d["message"]
     assert not [m for m in mutations(s) if "DELETE FROM" in m[0] or "SET server_id" in m[0]
                 or "server_aliases" in m[0]]
 
@@ -129,10 +145,11 @@ def test_live_check_treats_any_non_dead_agent_as_alive(monkeypatch):
     assert "server_id" in sql and "sentinel_agents" in sql
 
 
-def test_live_old_agent_publishes_the_alert(monkeypatch):
+def test_live_old_agent_publishes_the_notice(monkeypatch):
     s = session(match=True, live=True)
     run(IDENT, fp_event(), s, monkeypatch)
-    assert len(s.published) == 1 and s.published[0][1]["event_type"] == "DUPLICATE_FINGERPRINT"
+    assert len(s.published) == 1
+    assert s.published[0][1]["event_type"] == "SERVER_READDED" and s.published[0][1]["severity"] == "low"
 
 
 # ---------------------------------------------------------------- tenant isolation
@@ -234,10 +251,38 @@ def test_merge_records_alias_and_repoints_existing_aliases(monkeypatch):
     assert idx(s, f"UPDATE {SCHEMA}.server_aliases SET server_id") < idx(s, f"DELETE FROM {SCHEMA}.servers")
 
 
-def test_merge_publishes_nothing(monkeypatch):
+def test_merge_records_info_notice_on_the_surviving_server(monkeypatch):
     s = session(match=True)
     run(IDENT, fp_event(), s, monkeypatch)
-    assert s.published == []
+    (_, p), = sqls(s, f"INSERT INTO {SCHEMA}.tamper_alerts")
+    assert p["etype"] == "SERVER_READDED" and p["sev"] == "low"
+    assert p["sid"] == OLD, "the new server row is deleted, so the notice lives on the survivor"
+    d = json.loads(p["details"])
+    assert d["action"] == "merged" and d["existing_server_id"] == OLD and d["new_server_id"] == SID
+    assert "previous server" in d["message"].lower() and "re-added" in d["message"].lower()
+    assert idx(s, f"INSERT INTO {SCHEMA}.tamper_alerts") > idx(s, f"INSERT INTO {SCHEMA}.server_aliases")
+
+
+def test_merge_publishes_the_notice_once_after_commit(monkeypatch):
+    s = session(match=True)
+    run(IDENT, fp_event(), s, monkeypatch)
+    assert len(s.published) == 1
+    assert s.published[0][1]["event_type"] == "SERVER_READDED" and s.published[0][1]["server_id"] == OLD
+    s.commit.assert_awaited_once()
+
+
+def test_failed_merge_publishes_no_notice(monkeypatch):
+    s = session(match=True)
+    real = s.execute
+
+    async def flaky(stmt, params=None):
+        if "INSERT INTO" in str(stmt) and "server_aliases" in str(stmt):
+            raise RuntimeError("boom")
+        return await real(stmt, params)
+
+    s.execute = flaky
+    run(IDENT, fp_event(), s, monkeypatch)
+    assert s.published == [] and not sqls(s, f"INSERT INTO {SCHEMA}.tamper_alerts")
 
 
 def test_db_error_mid_merge_rolls_back(monkeypatch):
