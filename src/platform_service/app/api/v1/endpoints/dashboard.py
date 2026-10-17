@@ -47,6 +47,8 @@ class AlertPayload(BaseModel):
     severity: str
     details: dict
     detected_at: str
+    status: str = "OPEN"
+    mitigation_notes: Optional[str] = None
 
 class PagedAlertsResponse(BaseModel):
     data: list[AlertPayload]
@@ -71,7 +73,7 @@ async def get_alerts(
     await set_tenant_search_path(db, company_slug)
 
     # Defaults: query the last 30 days of data to trigger partition pruning
-    pruning_limit = "AND detected_at >= (now() - INTERVAL '30 days')"
+    pruning_limit = "AND tamper_alerts.detected_at >= (now() - INTERVAL '30 days')"
     cursor_timestamp = None
     cursor_id = None
 
@@ -84,19 +86,22 @@ async def get_alerts(
             cursor_timestamp = datetime.fromisoformat(ts_str)
             cursor_id = cid
             # When paginate, search backwards from cursor point (newer to older)
-            pruning_limit = "AND detected_at <= :cursor_ts AND (detected_at < :cursor_ts OR id < :cursor_id)"
+            pruning_limit = "AND tamper_alerts.detected_at <= :cursor_ts AND (tamper_alerts.detected_at < :cursor_ts OR tamper_alerts.id < :cursor_id)"
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid cursor payload mapping")
 
     # Dynamic cursor query execution
     # Prunes unused monthly tables by directly searching partition key detected_at
     sql = f"""
-        SELECT id, server_id, event_type, severity, details, detected_at::text,
-               (SELECT s.hostname FROM "client_{company_slug}".servers s WHERE s.id = tamper_alerts.server_id) AS hostname
+        SELECT tamper_alerts.id, tamper_alerts.server_id, tamper_alerts.event_type, tamper_alerts.severity,
+               tamper_alerts.details, tamper_alerts.detected_at::text AS detected_at,
+               (SELECT s.hostname FROM "client_{company_slug}".servers s WHERE s.id = tamper_alerts.server_id) AS hostname,
+               COALESCE(m.status, 'OPEN') AS status, m.mitigation_notes
         FROM "client_{company_slug}".tamper_alerts
+        LEFT JOIN "client_{company_slug}".alert_mitigations m ON m.alert_id = tamper_alerts.id
         WHERE 1=1
         {pruning_limit}
-        ORDER BY detected_at DESC, id DESC
+        ORDER BY tamper_alerts.detected_at DESC, tamper_alerts.id DESC
         LIMIT :limit_plus_one
     """
 
@@ -125,7 +130,9 @@ async def get_alerts(
             event_type=r.event_type,
             severity=r.severity,
             details=r.details,
-            detected_at=r.detected_at
+            detected_at=r.detected_at,
+            status=r.status,
+            mitigation_notes=r.mitigation_notes,
         ) for r in data_rows
     ]
 
@@ -294,6 +301,74 @@ async def mitigate_alert(
     await db.commit()
     
     return {"status": "success", "message": "Incident successfully mitigated"}
+
+
+QUARANTINE_TTL_SECONDS = 300
+
+
+@router.post("/alerts/{alert_id}/quarantine")
+async def quarantine_alert(
+    alert_id: str,
+    db: AsyncSession = Depends(get_db_session),
+    admin_claims: dict = Depends(RequirePermission("security.respond"))
+):
+    """
+    Queues a SIGKILL of the process that tripped the alert. The sentinel polls its queue over mTLS and
+    only kills if /proc/<pid>/exe still matches the recorded exe. Status stays QUARANTINE_REQUESTED
+    until the agent reports back.
+    """
+    company_slug = admin_claims["company_slug"]
+    if company_slug == "global":
+        raise HTTPException(status_code=400, detail="Scope mismatch: Endpoint requires tenant authorization context")
+
+    await set_tenant_search_path(db, company_slug)
+
+    res = await db.execute(
+        text(f"SELECT server_id, details FROM \"client_{company_slug}\".tamper_alerts WHERE id = :alert_id LIMIT 1"),
+        {"alert_id": alert_id},
+    )
+    alert = res.fetchone()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    details = alert.details if isinstance(alert.details, dict) else json.loads(alert.details or "{}")
+    pid, exe = details.get("pid"), details.get("exe")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1 or not exe:
+        raise HTTPException(status_code=400, detail="Alert has no killable process (pid/exe missing)")
+
+    # The agent's cert id is the server id or, after a re-add merge, one of its aliases.
+    alias_res = await db.execute(
+        text(f"SELECT alias_id FROM \"client_{company_slug}\".server_aliases WHERE server_id = :server_id"),
+        {"server_id": str(alert.server_id)},
+    )
+    agent_ids = {str(alert.server_id), *(str(r.alias_id) for r in alias_res.fetchall())}
+
+    await db.execute(
+        text(f"""
+            INSERT INTO "client_{company_slug}".alert_mitigations
+                (alert_id, analyst_user_id, mitigation_notes, status, target_pid, target_exe, target_comm)
+            VALUES (:alert_id, :analyst_id, :notes, 'QUARANTINE_REQUESTED', :pid, :exe, :comm)
+            ON CONFLICT (alert_id) DO UPDATE SET
+                status = 'QUARANTINE_REQUESTED', target_pid = EXCLUDED.target_pid,
+                target_exe = EXCLUDED.target_exe, target_comm = EXCLUDED.target_comm,
+                result_msg = NULL, updated_at = now()
+        """),
+        {"alert_id": alert_id, "analyst_id": admin_claims["user_id"], "notes": "Process quarantine requested",
+         "pid": pid, "exe": exe, "comm": details.get("comm")},
+    )
+    await db.commit()
+
+    action = json.dumps({"action": "KILL_PROCESS", "pid": pid, "exe": exe, "alert_id": alert_id})
+    r = redis.from_url(settings.REDIS_URL, decode_responses=True)
+    try:
+        for agent_id in agent_ids:
+            key = f"pending_actions:{company_slug}.{agent_id}"
+            await r.rpush(key, action)
+            await r.expire(key, QUARANTINE_TTL_SECONDS)
+    finally:
+        await r.aclose()
+
+    return {"status": "QUARANTINE_REQUESTED", "alert_id": alert_id, "pid": pid}
 
 
 class SummaryKPIsResponse(BaseModel):

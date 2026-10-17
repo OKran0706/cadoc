@@ -4,11 +4,12 @@ import json
 import asyncio
 import re
 import urllib.request
+import uuid
 from contextlib import asynccontextmanager
 import hvac
 
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Header
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictBool
 from aiokafka import AIOKafkaProducer
 
 from crypto import verify_signature, verify_timestamp
@@ -383,6 +384,95 @@ async def get_killswitch(request: Request):
     except Exception as exc:
         logger.error("KILLSWITCH_FETCH_ERROR: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to fetch killswitch state")
+
+
+def _valid_action(a) -> bool:
+    return (
+        isinstance(a, dict)
+        and a.get("action") == "KILL_PROCESS"
+        and isinstance(a.get("pid"), int) and not isinstance(a["pid"], bool) and a["pid"] > 1
+        and isinstance(a.get("exe"), str) and a["exe"]
+    )
+
+
+@app.get("/control/actions")
+async def get_control_actions(request: Request):
+    """
+    Pops the remote actions (process quarantine) queued by the platform for the calling sentinel.
+    Tenant and agent come only from the verified client-cert CN; the queue is read-and-cleared atomically.
+    """
+    cert_id = _extract_client_id(request)
+    if not cert_id:
+        raise HTTPException(status_code=401, detail="Client identity could not be determined")
+    ident = parse_agent_cn(cert_id)
+    if not ident:
+        raise HTTPException(status_code=403, detail="Bad credentials — invalid certificate format")
+    if await _is_revoked(cert_id):
+        raise HTTPException(status_code=403, detail="Agent has been decommissioned")
+
+    slug, sentinel_id = ident
+    try:
+        async with liveness_mgr.redis.pipeline(transaction=True) as pipe:
+            key = f"pending_actions:{slug}.{sentinel_id}"
+            pipe.lrange(key, 0, -1)
+            pipe.delete(key)
+            raw, _ = await pipe.execute()
+    except Exception as exc:
+        logger.error("CONTROL_ACTIONS_FETCH_FAILED: client=%s err=%s", cert_id, type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Action queue unavailable")
+
+    actions = []
+    for item in raw:
+        try:
+            a = json.loads(item)
+        except (TypeError, ValueError):
+            continue
+        if _valid_action(a):
+            actions.append(a)
+    if actions:
+        logger.info("CONTROL_ACTIONS_FETCH: client=%s count=%d", cert_id, len(actions))
+    return {"actions": actions}
+
+
+class ActionResult(BaseModel):
+    alert_id: uuid.UUID
+    ok: StrictBool
+    message: str = Field("", max_length=500)
+
+
+def _platform_post_action_result(slug: str, server_id: str, alert_id: str, ok: bool, message: str) -> dict:
+    """Blocking call relaying a sentinel's action outcome to the platform (run via asyncio.to_thread)."""
+    url = f"{PLATFORM_URL}/internal/v1/tenants/{slug}/servers/{server_id}/actions/result"
+    data = json.dumps({"alert_id": alert_id, "ok": ok, "message": message}).encode()
+    req = urllib.request.Request(
+        url, data=data, method="POST",
+        headers={"X-Internal-Token": INTERNAL_API_TOKEN, "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return json.loads(resp.read(_MAX_PLATFORM_BODY))
+
+
+@app.post("/control/actions/result")
+async def post_action_result(body: ActionResult, request: Request):
+    """Sentinel reports whether a queued KILL_PROCESS succeeded; identity comes only from the client cert."""
+    cert_id = _extract_client_id(request)
+    if not cert_id:
+        raise HTTPException(status_code=401, detail="Client identity could not be determined")
+    ident = parse_agent_cn(cert_id)
+    if not ident:
+        raise HTTPException(status_code=403, detail="Bad credentials — invalid certificate format")
+    if await _is_revoked(cert_id):
+        raise HTTPException(status_code=403, detail="Agent has been decommissioned")
+
+    slug, sentinel_id = ident
+    try:
+        await asyncio.to_thread(
+            _platform_post_action_result, slug, _agent_uuid(sentinel_id), str(body.alert_id), body.ok, body.message
+        )
+    except Exception as exc:
+        logger.error("ACTION_RESULT_RELAY_FAILED: client=%s err=%s", cert_id, type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Platform unavailable")
+    return {"status": "ok"}
 
 
 _CANARY_FIELDS = ("id", "path", "type", "sha256", "status")

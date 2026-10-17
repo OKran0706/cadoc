@@ -106,3 +106,18 @@ def test_scope_survives_subqueries_and_ctes():
 def test_rejects_non_uuid_project(pid):
     with pytest.raises(GuardError):
         _guard("SELECT 1 FROM servers", pid)
+
+
+def test_alert_mitigations_selectable_and_project_scoped():
+    out = guard_sql("SELECT status, target_pid, target_exe FROM alert_mitigations WHERE status = 'QUARANTINED'")
+    assert out.count(PID) == 1  # no server_id column: scoped through its alert's server
+
+
+@pytest.mark.parametrize("sql", [
+    "UPDATE alert_mitigations SET status = 'QUARANTINED'",
+    "DELETE FROM alert_mitigations",
+    "INSERT INTO alert_mitigations(alert_id) VALUES ('x')",
+])
+def test_alert_mitigations_is_read_only(sql):
+    with pytest.raises(GuardError):
+        guard_sql(sql)

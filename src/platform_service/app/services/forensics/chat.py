@@ -38,6 +38,7 @@ Tables (everything is already limited to the user's project; never add a project
 - tamper_alerts(id uuid, server_id -> servers.id, agent_id -> sentinel_agents.id, event_type, severity, details jsonb, detected_at timestamptz, created_at)
 - sentinel_agents(id uuid, server_id -> servers.id, version, git_commit, status in active|offline|degraded|decommissioned, last_connected_at, created_at)
 - canary_decoy_files(id uuid, server_id -> servers.id, file_path, decoy_type, status in planted|tampered|cleaned_up|verification_failed|orphaned, planted_at, last_verified)
+- alert_mitigations(id uuid, alert_id -> tamper_alerts.id, status in QUARANTINE_REQUESTED|QUARANTINED|QUARANTINE_FAILED or null for plain notes, target_pid, target_exe, target_comm, mitigation_notes, result_msg, created_at, updated_at). Join to tamper_alerts on alert_id for the canary path (details->>'path') and host.
 Join everything to servers on server_id to get hostname.
 
 tamper_alerts values:

@@ -17,6 +17,9 @@ SCOPES = {
     "tamper_alerts": _VIA_SERVER.replace("{t}", "tamper_alerts"),
     "sentinel_agents": _VIA_SERVER.replace("{t}", "sentinel_agents"),
     "canary_decoy_files": _VIA_SERVER.replace("{t}", "canary_decoy_files"),
+    # No server_id of its own: scoped through the alert it mitigates.
+    "alert_mitigations": "SELECT m.* FROM alert_mitigations m JOIN tamper_alerts a ON a.id = m.alert_id "
+                         "JOIN servers s ON s.id = a.server_id WHERE s.project_id = '{p}'",
 }
 
 # Function names are sqlglot's normalized sql_name() (Anonymous funcs use the raw name).

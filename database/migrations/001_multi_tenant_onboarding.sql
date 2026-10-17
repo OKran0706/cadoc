@@ -432,6 +432,11 @@ BEGIN
             alert_id UUID NOT NULL UNIQUE,
             analyst_user_id UUID,
             mitigation_notes TEXT,
+            status TEXT,
+            target_pid INT,
+            target_exe TEXT,
+            target_comm TEXT,
+            result_msg TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )

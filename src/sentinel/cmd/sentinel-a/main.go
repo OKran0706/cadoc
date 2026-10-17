@@ -28,6 +28,7 @@ import (
 	"github.com/your-org/canary/sentinel/internal/deployer_daemon"
 	"github.com/your-org/canary/sentinel/internal/fingerprint"
 	"github.com/your-org/canary/sentinel/internal/ingestclient"
+	"github.com/your-org/canary/sentinel/internal/quarantine"
 	"github.com/your-org/canary/sentinel/internal/selfmon"
 	"github.com/your-org/canary/sentinel/internal/signer"
 	"github.com/your-org/canary/sentinel/internal/sysutil"
@@ -455,6 +456,13 @@ func main() {
 	go func() {
 		defer wg.Done()
 		pollKillSwitch(ctx, cancel, cfg, s, ic, ticketVerifier, stateDir)
+	}()
+
+	// Remote process quarantine: kills the PID an admin flagged from the dashboard (exe-verified).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		quarantine.Poll(ctx, ic, quarantine.SystemDeps(), 5*time.Second)
 	}()
 
 	// Main event loop: emit heartbeats and collect events from local sources

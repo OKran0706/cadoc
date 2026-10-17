@@ -1009,7 +1009,9 @@ async def test_dashboard_alerts_gaps(monkeypatch):
     mock_alert_row.severity = "high"
     mock_alert_row.details = {}
     mock_alert_row.detected_at = "2026-05-17T22:15:00+00:00"
-    
+    mock_alert_row.status = "OPEN"
+    mock_alert_row.mitigation_notes = None
+
     mock_db.execute.side_effect = [
         AsyncMock(), # set search path
         MagicMock(fetchall=MagicMock(return_value=[mock_alert_row])) # Fetch alerts with cursor
