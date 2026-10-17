@@ -22,6 +22,7 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.database import async_session_factory
+from app.services.stream import publish
 
 logger = logging.getLogger("platform.event_writer")
 
@@ -64,14 +65,15 @@ _SYSTEM_ALERTS = {
 
 
 async def _insert_alert(session, slug: str, server_id: str, event_type: str, severity: str,
-                        details: dict, detected_at: datetime) -> None:
+                        details: dict, detected_at: datetime) -> dict:
+    """Insert an alert; returns the live-stream payload (published by the caller after commit)."""
     schema = f"client_{slug}"
     # Only current+next month partitions exist at provisioning; make sure this one does.
     await session.execute(
         text("SELECT public.ensure_monthly_range_partition(:schema, 'tamper_alerts', :ts)"),
         {"schema": schema, "ts": detected_at},
     )
-    await session.execute(
+    res = await session.execute(
         text(f"""
             INSERT INTO "{schema}".tamper_alerts (server_id, agent_id, event_type, severity, details, detected_at)
             VALUES (
@@ -79,10 +81,13 @@ async def _insert_alert(session, slug: str, server_id: str, event_type: str, sev
                 (SELECT id FROM "{schema}".sentinel_agents WHERE id = CAST(:sid AS uuid)),
                 :etype, :sev, CAST(:details AS jsonb), :ts
             )
+            RETURNING id
         """),
         {"sid": server_id, "etype": event_type, "sev": severity,
          "details": json.dumps(details), "ts": detected_at},
     )
+    return {"type": "alert", "id": str(res.scalar()), "server_id": server_id, "event_type": event_type,
+            "severity": severity, "details": details, "detected_at": detected_at.isoformat()}
 
 
 async def _handle_map(session, slug: str, server_id: str, payload: dict) -> None:
@@ -114,7 +119,7 @@ async def _handle_map(session, slug: str, server_id: str, payload: dict) -> None
     logger.info("EVENT_WRITER: canary map recorded slug=%s server=%s canaries=%d", slug, server_id, len(canaries))
 
 
-async def _handle_file_event(session, slug: str, server_id: str, payload: dict) -> None:
+async def _handle_file_event(session, slug: str, server_id: str, payload: dict) -> Optional[dict]:
     schema = f"client_{slug}"
     path = payload.get("path", "")
     res = await session.execute(
@@ -126,17 +131,18 @@ async def _handle_file_event(session, slug: str, server_id: str, payload: dict) 
     decoy = res.fetchone()
     if not decoy:
         logger.info("EVENT_WRITER: file event on non-decoy path %s ignored", path)
-        return
+        return None
     op = payload.get("op", "")
     details = {k: payload.get(k) for k in ("op", "path", "dest_path", "pid", "audit_id", "confidence", "host") if payload.get(k) is not None}
     details["decoy_id"] = str(decoy.id)
-    await _insert_alert(session, slug, server_id, "DECOY_TAMPER", file_severity(op), details, parse_ts(payload.get("ts")))
+    live = await _insert_alert(session, slug, server_id, "DECOY_TAMPER", file_severity(op), details, parse_ts(payload.get("ts")))
     await session.execute(
         text(f"""UPDATE "{schema}".canary_decoy_files SET status = 'tampered', updated_at = now()
                  WHERE id = :id"""),
         {"id": decoy.id},
     )
     logger.info("EVENT_WRITER: DECOY_TAMPER slug=%s server=%s op=%s path=%s", slug, server_id, op, path)
+    return live
 
 
 async def handle_event(identity: str, payload: dict) -> None:
@@ -148,21 +154,25 @@ async def handle_event(identity: str, payload: dict) -> None:
     etype = payload.get("type", "")
     if not (etype == "CANARY_MAP_DEPLOYED" or etype.startswith("SENTINEL_FILE_") or etype in _SYSTEM_ALERTS):
         return
+    live = None
     async with async_session_factory() as session:
         try:
             await session.begin()
             if etype == "CANARY_MAP_DEPLOYED":
                 await _handle_map(session, slug, server_id, payload)
             elif etype.startswith("SENTINEL_FILE_"):
-                await _handle_file_event(session, slug, server_id, payload)
+                live = await _handle_file_event(session, slug, server_id, payload)
             else:
                 alert_type, severity = _SYSTEM_ALERTS[etype]
                 details = {k: v for k, v in payload.items() if k not in ("prev_hash", "seq")}
-                await _insert_alert(session, slug, server_id, alert_type, severity, details, parse_ts(payload.get("ts")))
+                live = await _insert_alert(session, slug, server_id, alert_type, severity, details, parse_ts(payload.get("ts")))
             await session.commit()
         except Exception as exc:
             await session.rollback()
             logger.error("EVENT_WRITER: failed to record %s for %s: %s", etype, identity, exc)
+            return
+    if live:  # only after a successful commit
+        await publish(slug, live)
 
 
 async def run_event_writer() -> None:

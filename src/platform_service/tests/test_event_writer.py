@@ -39,8 +39,15 @@ def run(identity, payload, session, monkeypatch):
     async def factory():
         yield session
 
+    published = []
+
+    async def fake_publish(slug, msg):
+        published.append((slug, msg))
+
     monkeypatch.setattr(ew, "async_session_factory", factory)
+    monkeypatch.setattr(ew, "publish", fake_publish)
     asyncio.run(ew.handle_event(identity, payload))
+    session.published = published
 
 
 def sqls(session, needle):
@@ -120,6 +127,23 @@ def test_db_error_rolls_back(monkeypatch):
     run(IDENT, {"type": "BINARY_TAMPERED"}, s, monkeypatch)
     s.rollback.assert_awaited_once()
     s.commit.assert_not_awaited()
+    assert s.published == []  # nothing live for rolled-back work
+
+
+def test_alert_is_published_live_after_commit(monkeypatch):
+    s = FakeSession(rows={"FROM \"client_mock-acme\".canary_decoy_files": MagicMock(id="d")})
+    run(IDENT, {"type": "SENTINEL_FILE_WRITE", "op": "WRITE", "path": "/p"}, s, monkeypatch)
+    s.commit.assert_awaited_once()
+    (slug, msg), = s.published
+    assert slug == "mock-acme" and msg["type"] == "alert" and msg["server_id"] == SID
+    assert msg["event_type"] == "DECOY_TAMPER" and msg["severity"] == "critical" and "id" in msg
+
+
+def test_non_alert_events_publish_nothing(monkeypatch):
+    s = FakeSession()
+    run(IDENT, {"type": "CANARY_MAP_DEPLOYED", "map": {"canaries": []}}, s, monkeypatch)
+    run(IDENT, {"type": "SENTINEL_FILE_READ", "op": "READ", "path": "/not-a-decoy"}, s, monkeypatch)
+    assert s.published == []
 
 
 def test_map_duplicate_paths_keep_last_entry(monkeypatch):

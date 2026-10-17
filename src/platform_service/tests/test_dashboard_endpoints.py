@@ -484,3 +484,37 @@ async def test_sse_stream(monkeypatch):
                     assert data["alert_id"] == "uuid-1"
                     assert data["severity"] == "critical"
                     break
+
+
+@pytest.mark.asyncio
+async def test_sse_stream_server_filter(monkeypatch):
+    from unittest.mock import MagicMock
+    mine, other = "34d0222e-5f7b-4b7f-b1be-023377ec8f8f", "11111111-1111-4111-8111-111111111111"
+    mock_redis = AsyncMock()
+    mock_pubsub = AsyncMock()
+    mock_pubsub.get_message.side_effect = [
+        {"type": "message", "data": json.dumps({"type": "heartbeat", "server_id": other})},
+        {"type": "message", "data": json.dumps({"type": "alert", "server_id": mine})},
+        None,
+    ]
+    mock_redis.pubsub = MagicMock(return_value=mock_pubsub)
+
+    import redis.asyncio as aioredis
+    monkeypatch.setattr(aioredis, "from_url", lambda url, **kwargs: mock_redis)
+    from fastapi import Request
+    monkeypatch.setattr(Request, "is_disconnected", AsyncMock(side_effect=[False, False, True]))
+
+    import asyncio
+    async def mock_sleep(delay):
+        return
+    monkeypatch.setattr(asyncio, "sleep", mock_sleep)
+
+    headers = get_auth_headers("client-a")
+    seen = []
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as ac:
+        async with ac.stream("GET", f"/api/v1/dashboard/alerts/stream?server_id={mine}", headers=headers) as response:
+            assert response.status_code == 200
+            async for line in response.aiter_lines():
+                if line.startswith("data:"):
+                    seen.append(json.loads(line[5:]))
+    assert [m["server_id"] for m in seen] == [mine]  # the other server's heartbeat was filtered out

@@ -1,7 +1,9 @@
 import asyncio
 import logging
 import re
+from datetime import datetime, timezone
 import redis.asyncio as redis
+from app.services.stream import publish
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from app.core.config import settings
@@ -48,9 +50,16 @@ async def listen_redis_heartbeat_expirations():
             if channel.endswith(":expired"):
                 print(f"LIVENESS TIMEOUT DETECTED: Redis heartbeat key expired: {event_key}")
                 await mark_agent_offline(company_slug, agent_id)
+                status = "offline"
             elif channel.endswith(":set"):
                 print(f"LIVENESS ACTIVE DETECTED: Redis heartbeat key set: {event_key}")
                 await mark_agent_online(company_slug, agent_id)
+                status = "active"
+            else:
+                continue
+            # Live tick for the SSE stream: every heartbeat, plus the offline transition on expiry.
+            await publish(company_slug, {"type": "heartbeat", "server_id": agent_id, "status": status,
+                                         "ts": datetime.now(timezone.utc).isoformat()})
             
     except asyncio.CancelledError:
         logger.info("Keyspace subscription listener cancelled")

@@ -5,6 +5,7 @@ import re
 import redis.asyncio as redis
 from datetime import datetime, timezone
 from typing import Optional
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -706,10 +707,12 @@ async def export_telemetry_csv(
 @router.get("/alerts/stream")
 async def get_alerts_stream(
     request: Request,
+    server_id: Optional[UUID] = Query(None, description="Only events for this server (default: all servers)"),
     admin_claims: dict = Depends(RequirePermission("security.read"))
 ):
     """
-    Provides multi-tenant real-time security alert feeds using Redis Pub/Sub SSE stream.
+    Provides multi-tenant real-time feed (alerts + agent heartbeats) using Redis Pub/Sub SSE stream.
+    Tenant comes from the JWT (channel name); `server_id` only narrows within that tenant.
     """
     company_slug = admin_claims["company_slug"]
     if company_slug == "global":
@@ -728,6 +731,8 @@ async def get_alerts_stream(
                 if message:
                     try:
                         payload = json.loads(message["data"])
+                        if server_id and payload.get("server_id") != str(server_id):
+                            continue
                         yield f"data: {json.dumps(payload)}\n\n"
                     except Exception:
                         pass
