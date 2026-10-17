@@ -7,7 +7,7 @@ Consumes `canary-events` (messages tagged with an `identity` header = mTLS-verif
   - SENTINEL_FILE_*              -> tamper_alerts (DECOY_TAMPER) + decoy status 'tampered'
   - BINARY_TAMPERED, ALERT_*     -> tamper_alerts (BINARY_TAMPER / SYSTEM_INTEGRITY_FAIL)
   - CANARY_CLEANUP               -> decoy status 'cleaned_up' (sentinel removed leftover canaries)
-  - SENTINEL_FINGERPRINT         -> servers.fingerprint; folds an earlier record of the same machine into the new one
+  - SENTINEL_FINGERPRINT         -> servers.fingerprint; merges a re-added server into its earlier record (alias)
 Everything else is ignored.
 
 ponytail: at-most-once, no dead-letter queue; a failed message is logged and skipped.
@@ -149,14 +149,27 @@ async def _handle_file_event(session, slug: str, server_id: str, payload: dict) 
     return live
 
 
-async def _merge_servers(session, schema: str, old: str, new: str, old_project_id: str, fp: str) -> None:
-    """Fold the earlier server record `old` into the freshly added `new` (the id in the sentinel's
-    certificate), then delete `old`. `new` keeps its hostname/ip/specs; it takes `old`'s project,
-    roles and history.
+async def _resolve_server(session, schema: str, server_id: str) -> str:
+    """A merged (re-added) server's new sentinel identity maps to the surviving record."""
+    res = await session.execute(
+        text(f"""SELECT server_id FROM "{schema}".server_aliases WHERE alias_id = CAST(:sid AS uuid)"""),
+        {"sid": server_id},
+    )
+    row = res.fetchone()
+    return str(row.server_id) if row else server_id
 
-    Order matters: retire the old agent and orphan the old decoys before anything is re-pointed
-    (CANARY_MAP_DEPLOYED bulk-resets 'planted' rows and would hide them), and re-point everything
-    before deleting `old` so the ON DELETE CASCADE has nothing left to remove.
+
+async def _merge_servers(session, schema: str, old: str, new: str, own, fp: str) -> None:
+    """Fold the freshly added server row `new` into the earlier record `old`.
+
+    `old` keeps its id, project, roles and alert history (tamper_alerts are immutable, so they
+    are never touched); it takes `new`'s hostname/ip/specs/status. `new` is deleted and its
+    sentinel identity recorded as an alias of `old`.
+
+    Order matters: retire the old agent and orphan the old decoys before re-pointing the new
+    ones (CANARY_MAP_DEPLOYED bulk-resets 'planted' rows and would hide them), re-point before
+    deleting `new` so the ON DELETE CASCADE has nothing left to remove, and delete `new` before
+    renaming `old` (hostname is UNIQUE).
     """
     ids = {"old": old, "new": new}
     await session.execute(
@@ -165,19 +178,25 @@ async def _merge_servers(session, schema: str, old: str, new: str, old_project_i
     await session.execute(
         text(f"""UPDATE "{schema}".canary_decoy_files SET status = 'orphaned', updated_at = now()
                  WHERE server_id = CAST(:old AS uuid) AND status = 'planted'"""), {"old": old})
-    await session.execute(
-        text(f"""DELETE FROM "{schema}".server_roles WHERE server_id = CAST(:new AS uuid)"""), {"new": new})
-    for table in ("sentinel_agents", "canary_decoy_files", "tamper_alerts", "server_roles"):
+    for table in ("sentinel_agents", "canary_decoy_files", "server_aliases"):
         await session.execute(
-            text(f"""UPDATE "{schema}".{table} SET server_id = CAST(:new AS uuid)
-                     WHERE server_id = CAST(:old AS uuid)"""), ids)
-    await session.execute(text(f"""DELETE FROM "{schema}".servers WHERE id = CAST(:old AS uuid)"""), {"old": old})
+            text(f"""UPDATE "{schema}".{table} SET server_id = CAST(:old AS uuid)
+                     WHERE server_id = CAST(:new AS uuid)"""), ids)
+    await session.execute(text(f"""DELETE FROM "{schema}".servers WHERE id = CAST(:new AS uuid)"""), {"new": new})
     await session.execute(
-        text(f"""UPDATE "{schema}".servers SET project_id = CAST(:project AS uuid), fingerprint = :fp,
-                     updated_at = now() WHERE id = CAST(:new AS uuid)"""),
-        {"new": new, "project": old_project_id, "fp": fp},
+        text(f"""UPDATE "{schema}".servers SET hostname = :hostname, ip_address = CAST(:ip AS inet),
+                     status = :status, specs = CAST(:specs AS jsonb), fingerprint = :fp, updated_at = now()
+                 WHERE id = CAST(:old AS uuid)"""),
+        {"old": old, "hostname": own.hostname, "ip": own.ip_address, "status": own.status,
+         "specs": json.dumps(own.specs or {}), "fp": fp},
     )
-    logger.info("EVENT_WRITER: merged server %s into %s (same fingerprint, old agent dead)", old, new)
+    await session.execute(
+        text(f"""INSERT INTO "{schema}".server_aliases (alias_id, server_id)
+                 VALUES (CAST(:alias AS uuid), CAST(:old AS uuid))
+                 ON CONFLICT (alias_id) DO UPDATE SET server_id = EXCLUDED.server_id"""),
+        {"alias": new, "old": old},
+    )
+    logger.info("EVENT_WRITER: merged server %s into %s (same fingerprint, old agent dead)", new, old)
 
 
 async def _handle_fingerprint(session, slug: str, server_id: str, payload: dict) -> Optional[dict]:
@@ -187,15 +206,15 @@ async def _handle_fingerprint(session, slug: str, server_id: str, payload: dict)
     fp = fp.lower()
     schema = f"client_{slug}"
     res = await session.execute(
-        text(f"""SELECT id, fingerprint FROM "{schema}".servers WHERE id = CAST(:sid AS uuid)"""),
+        text(f"""SELECT id, fingerprint, hostname, ip_address::text AS ip_address, specs, status
+                 FROM "{schema}".servers WHERE id = CAST(:sid AS uuid)"""),
         {"sid": server_id},
     )
     own = res.fetchone()
     if not own or own.fingerprint == fp:
         return None
     res = await session.execute(
-        text(f"""SELECT id, project_id FROM "{schema}".servers
-                 WHERE fingerprint = :fp AND id <> CAST(:sid AS uuid) LIMIT 1"""),
+        text(f"""SELECT id FROM "{schema}".servers WHERE fingerprint = :fp AND id <> CAST(:sid AS uuid) LIMIT 1"""),
         {"fp": fp, "sid": server_id},
     )
     match = res.fetchone()
@@ -205,15 +224,24 @@ async def _handle_fingerprint(session, slug: str, server_id: str, payload: dict)
                      WHERE id = CAST(:sid AS uuid)"""), {"fp": fp, "sid": server_id})
         return None
     old = str(match.id)
+    details = {"existing_server_id": old, "new_server_id": server_id}
+    ts = parse_ts(payload.get("ts"))
     res = await session.execute(
         text(f"""SELECT 1 FROM "{schema}".sentinel_agents
                  WHERE server_id = CAST(:old AS uuid) AND status NOT IN ('offline', 'decommissioned') LIMIT 1"""),
         {"old": old},
     )
     if res.fetchone():  # earlier agent still alive: this is a clone, not a re-add
-        return await _insert_alert(session, slug, server_id, "DUPLICATE_FINGERPRINT", "high",
-                                   {"existing_server_id": old, "new_server_id": server_id}, parse_ts(payload.get("ts")))
-    await _merge_servers(session, schema, old, server_id, str(match.project_id), fp)
+        details["reason"] = "existing server's agent is still active"
+        return await _insert_alert(session, slug, server_id, "DUPLICATE_FINGERPRINT", "high", details, ts)
+    res = await session.execute(
+        text(f"""SELECT 1 FROM "{schema}".tamper_alerts WHERE server_id = CAST(:sid AS uuid) LIMIT 1"""),
+        {"sid": server_id},
+    )
+    if res.fetchone():  # alerts are immutable: a server that has any cannot be deleted
+        details["reason"] = "new server already has alerts and cannot be merged"
+        return await _insert_alert(session, slug, server_id, "DUPLICATE_FINGERPRINT", "high", details, ts)
+    await _merge_servers(session, schema, old, server_id, own, fp)
     return None
 
 
@@ -249,6 +277,7 @@ async def handle_event(identity: str, payload: dict) -> None:
     async with async_session_factory() as session:
         try:
             await session.begin()
+            server_id = await _resolve_server(session, f"client_{slug}", server_id)
             if etype == "CANARY_MAP_DEPLOYED":
                 await _handle_map(session, slug, server_id, payload)
             elif etype == "CANARY_CLEANUP":

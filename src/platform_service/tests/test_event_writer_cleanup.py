@@ -118,3 +118,10 @@ def test_valid_ack_marks_cleaned_up_and_commits(monkeypatch):
     assert len(sqls(s, UPDATE)) == 1
     s.commit.assert_awaited_once()
 
+
+def test_ack_from_merged_identity_cleans_under_surviving_server(monkeypatch):
+    surv = "22222222-2222-4222-8222-222222222222"
+    s = FakeSession(rows={"server_aliases": MagicMock(server_id=surv)})
+    run(IDENT, ack([A]), s, monkeypatch)
+    (_, params), = sqls(s, UPDATE)
+    assert params["sid"] == surv

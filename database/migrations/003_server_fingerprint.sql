@@ -1,5 +1,6 @@
--- Server fingerprint (a re-added machine is recognised and its earlier record folded into the
--- new one), plus the 'orphaned' decoy status and 'DUPLICATE_FINGERPRINT' alert type. New tenants get all of this
+-- Server fingerprint + alias table (a re-added machine is recognised, merged into its earlier
+-- record, and its new sentinel identity aliased to it), plus the 'orphaned' decoy status and
+-- 'DUPLICATE_FINGERPRINT' alert type. New tenants get all of this
 -- from 001 (provision function). Idempotent.
 DO $$
 DECLARE
@@ -13,8 +14,12 @@ BEGIN
         EXECUTE format('ALTER TABLE %I.servers ADD COLUMN IF NOT EXISTS fingerprint VARCHAR(64)', s);
         EXECUTE format('CREATE INDEX IF NOT EXISTS servers_fingerprint_idx ON %I.servers (fingerprint)', s);
 
-        -- An earlier draft of this migration created an alias table; it is not used.
-        EXECUTE format('DROP TABLE IF EXISTS %I.server_aliases', s);
+        EXECUTE format($c$CREATE TABLE IF NOT EXISTS %I.server_aliases (
+            alias_id UUID PRIMARY KEY,
+            server_id UUID NOT NULL REFERENCES %I.servers(id) ON DELETE CASCADE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )$c$, s, s);
+        EXECUTE format('CREATE INDEX IF NOT EXISTS server_aliases_server_id_idx ON %I.server_aliases (server_id)', s);
 
         EXECUTE format('ALTER TABLE %I.canary_decoy_files DROP CONSTRAINT IF EXISTS canary_decoy_files_status_chk', s);
         EXECUTE format($c$ALTER TABLE %I.canary_decoy_files ADD CONSTRAINT canary_decoy_files_status_chk

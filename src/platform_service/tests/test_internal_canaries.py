@@ -169,11 +169,12 @@ async def test_query_only_selects_live_statuses(session):
 
 
 @pytest.mark.asyncio
-async def test_query_does_not_use_any_alias_lookup(session):
+async def test_merged_identity_resolves_to_surviving_server_in_sql(session):
     async with client() as c:
         await c.get(URL, headers={"X-Internal-Token": TOKEN})
-    (sql, _), = session.canary_queries()
-    assert "alias" not in sql.lower()
+    (sql, params), = session.canary_queries()
+    assert "server_aliases" in sql and "alias_id" in sql
+    assert SID not in sql and SID in params.values()
 
 
 @pytest.mark.asyncio

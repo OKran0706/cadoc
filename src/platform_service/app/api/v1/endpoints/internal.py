@@ -65,7 +65,10 @@ async def list_server_canaries(
             text(f"""
                 SELECT id, file_path, decoy_type, original_hash, status
                 FROM "client_{slug}".canary_decoy_files
-                WHERE server_id = CAST(:sid AS uuid) AND status IN ('planted', 'tampered', 'orphaned')
+                WHERE server_id = COALESCE(
+                          (SELECT a.server_id FROM "client_{slug}".server_aliases a WHERE a.alias_id = CAST(:sid AS uuid)),
+                          CAST(:sid AS uuid))
+                  AND status IN ('planted', 'tampered', 'orphaned')
                 ORDER BY planted_at, id
             """),
             {"sid": str(server_id)},

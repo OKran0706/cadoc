@@ -350,6 +350,15 @@ BEGIN
         )
     $ddl$, v_schema_name, v_schema_name);
 
+    -- A re-added server is merged into its earlier record; the new sentinel identity maps to it here.
+    EXECUTE format($ddl$
+        CREATE TABLE %I.server_aliases (
+            alias_id UUID PRIMARY KEY,
+            server_id UUID NOT NULL REFERENCES %I.servers(id) ON DELETE CASCADE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+    $ddl$, v_schema_name, v_schema_name);
+
     EXECUTE format($ddl$
         CREATE TABLE %I.server_roles (
             server_id UUID NOT NULL REFERENCES %I.servers(id) ON DELETE CASCADE,
@@ -433,6 +442,7 @@ BEGIN
     EXECUTE format('CREATE INDEX %I ON %I.api_keys (key_hash)', 'api_keys_key_hash_idx', v_schema_name);
     EXECUTE format('CREATE INDEX %I ON %I.servers (project_id)', 'servers_project_id_idx', v_schema_name);
     EXECUTE format('CREATE INDEX %I ON %I.servers (fingerprint)', 'servers_fingerprint_idx', v_schema_name);
+    EXECUTE format('CREATE INDEX %I ON %I.server_aliases (server_id)', 'server_aliases_server_id_idx', v_schema_name);
     EXECUTE format('CREATE INDEX %I ON %I.server_roles (role_id)', 'server_roles_role_id_idx', v_schema_name);
     EXECUTE format('CREATE INDEX %I ON %I.sentinel_agents (server_id)', 'sentinel_agents_server_id_idx', v_schema_name);
     EXECUTE format('CREATE INDEX %I ON %I.sentinel_agents (last_connected_at)', 'sentinel_agents_last_connected_at_idx', v_schema_name);

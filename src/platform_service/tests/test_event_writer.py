@@ -162,14 +162,19 @@ def test_map_duplicate_paths_keep_last_entry(monkeypatch):
 def test_publish_adds_hostname_once_and_caches(monkeypatch):
     from app.services import stream
     stream._hostnames.clear()
+    stream._agent_servers.clear()
     lookups, sent = [], []
 
     class S:
         async def __aenter__(self): return self
         async def __aexit__(self, *a): return False
         async def execute(self, stmt, params=None):
+            r = MagicMock()
+            if "sentinel_agents" in str(stmt):  # agent -> server lookup: no row, id unchanged
+                r.fetchone.return_value = None
+                return r
             lookups.append(params)
-            r = MagicMock(); r.fetchone.return_value = MagicMock(hostname="web-01.internal"); return r
+            r.fetchone.return_value = MagicMock(hostname="web-01.internal"); return r
 
     class R:
         async def publish(self, ch, msg): sent.append((ch, msg))
