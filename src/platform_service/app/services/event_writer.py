@@ -87,7 +87,10 @@ async def _insert_alert(session, slug: str, server_id: str, event_type: str, sev
 
 async def _handle_map(session, slug: str, server_id: str, payload: dict) -> None:
     schema = f"client_{slug}"
-    canaries = (payload.get("map") or {}).get("canaries") or []
+    # Two decoys can resolve to the same path (the later write replaces the earlier file),
+    # so keep one row per path: the last entry is what is actually on disk.
+    by_path = {c.get("path"): c for c in ((payload.get("map") or {}).get("canaries") or []) if c.get("path")}
+    canaries = list(by_path.values())
     # A new map replaces the previous one (the deployer removed the old files on rotation).
     await session.execute(
         text(f"""UPDATE "{schema}".canary_decoy_files SET status = 'cleaned_up', updated_at = now()

@@ -2,14 +2,14 @@
 # install-sentinel.sh - standalone Sentinel agent installer (no repo checkout needed).
 #
 #   curl -fsSLk https://<backend>/install.sh | sudo bash -s -- \
-#       --token <join-jwt> --server https://<backend> --client-id <slug>.<server-id> --ca-sha256 <hex>  [--profile app-server|db-server|k8s-node] [--interval seconds]
+#       --token <join-jwt> --server https://<backend> --client-id <slug>.<server-id> --ca-sha256 <hex>  [--profile app-server|db-server|k8s-node] [--interval seconds] [--jitter seconds]
 #
 # Downloads the binary + assets from <backend>/downloads, pins the Canary CA by
 # SHA-256, writes config, installs auditd rules + systemd unit, starts the agent,
 # waits for enrollment, then removes the one-time join token from disk.
 set -euo pipefail
 
-TOKEN=""; SERVER=""; CLIENT_ID=""; CA_SHA256=""; PROFILE="app-server"; INTERVAL="600"
+TOKEN=""; SERVER=""; CLIENT_ID=""; CA_SHA256=""; PROFILE="app-server"; INTERVAL="600"; JITTER="120"
 while [ $# -gt 0 ]; do
   case "$1" in
     --token)      TOKEN="$2"; shift 2 ;;
@@ -18,6 +18,7 @@ while [ $# -gt 0 ]; do
     --ca-sha256)  CA_SHA256="$2"; shift 2 ;;
     --profile)    PROFILE="$2"; shift 2 ;;
     --interval)   INTERVAL="$2"; shift 2 ;;
+    --jitter)     JITTER="$2"; shift 2 ;;
     *) echo "ERROR: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -164,6 +165,7 @@ echo "[*] Installing systemd unit..."
 # Validate inputs that are interpolated into the unit file.
 case "$PROFILE" in app-server|db-server|k8s-node) ;; *) echo "ERROR: unknown --profile '$PROFILE'." >&2; exit 2 ;; esac
 case "$INTERVAL" in ''|*[!0-9]*) echo "ERROR: --interval must be seconds (integer)." >&2; exit 2 ;; esac
+case "$JITTER" in ''|*[!0-9]*) echo "ERROR: --jitter must be seconds (integer)." >&2; exit 2 ;; esac
 PROFILE_FILE="${INSTALL_DIR}/config/profiles/${PROFILE}.yaml"
 [ -f "$PROFILE_FILE" ] || { echo "ERROR: profile file ${PROFILE_FILE} missing from assets." >&2; exit 1; }
 
@@ -184,7 +186,7 @@ Wants=network-online.target
 EnvironmentFile=-/etc/canary/sentinel.env
 ExecStartPre=/usr/bin/mkdir -p /run/canary
 ExecStartPre=/usr/bin/chmod 700 /run/canary
-ExecStart=${INSTALL_DIR}/sentinel -deployer-profile ${PROFILE} -deployer-config ${INSTALL_DIR}/config -deployer-templates /opt/sentinel/templates -deployer-interval ${INTERVAL}
+ExecStart=${INSTALL_DIR}/sentinel -deployer-profile ${PROFILE} -deployer-config ${INSTALL_DIR}/config -deployer-templates /opt/sentinel/templates -deployer-interval ${INTERVAL} -deployer-max-jitter ${JITTER}
 Restart=always
 RestartSec=10
 CapabilityBoundingSet=CAP_AUDIT_CONTROL CAP_NET_ADMIN CAP_AUDIT_WRITE CAP_AUDIT_READ

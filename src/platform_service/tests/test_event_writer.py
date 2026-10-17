@@ -120,3 +120,12 @@ def test_db_error_rolls_back(monkeypatch):
     run(IDENT, {"type": "BINARY_TAMPERED"}, s, monkeypatch)
     s.rollback.assert_awaited_once()
     s.commit.assert_not_awaited()
+
+
+def test_map_duplicate_paths_keep_last_entry(monkeypatch):
+    s = FakeSession()
+    c = lambda i, h: {"id": f"0b9c1f7e-0000-4000-8000-00000000000{i}", "path": "/etc/app/config.yml.old",
+                      "type": "config_backup", "sha256": h, "planted_at": "2026-10-17T10:00:00Z"}
+    run(IDENT, {"type": "CANARY_MAP_DEPLOYED", "map": {"canaries": [c(1, "a" * 64), c(2, "b" * 64)]}}, s, monkeypatch)
+    ins = sqls(s, "INSERT INTO \"client_mock-acme\".canary_decoy_files")
+    assert len(ins) == 1 and ins[0][1]["hash"] == "b" * 64
