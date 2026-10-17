@@ -293,8 +293,8 @@ func main() {
 		go func() {
 			defer wg.Done()
 			if err := ipcServer.Start(ctx, "/run/canary/audit.sock", func(event *auditmon.AuditEvent) {
-				// Ignore our own file activity (canary rotation writes/deletes decoys we watch).
-				if event.PID == os.Getpid() {
+				// Ignore our own file activity: events from our PID, plus partial (PID-less) records during the deployer window.
+				if event.PID == os.Getpid() || deployer_daemon.Busy() {
 					return
 				}
 				log.Printf("[auditmon] Received event from consumer: id=%s path=%s op=%s", event.ID, event.Path, event.Op)
