@@ -447,7 +447,9 @@ func main() {
 				return
 			case <-ticker.C:
 				var cpuPercent float64
-				percents, err := cpu.Percent(100*time.Millisecond, false)
+				// Interval 0 = average since the previous heartbeat (the whole 5s). A 100ms sample covers only 20 kernel
+				// ticks on 2 cores (100 Hz), so it reads 0 or 5% and misses anything between samples.
+				percents, err := cpu.Percent(0, false)
 				if err == nil && len(percents) > 0 {
 					cpuPercent = percents[0]
 				}
