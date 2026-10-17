@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # Empty disables them: the routes fail closed.
     INTERNAL_API_TOKEN: str = Field("", validation_alias=AliasChoices("INTERNAL_API_TOKEN"))
 
+    # Forensics chat (Gemini). /forensics/chat returns 503 while the key is unset.
+    GEMINI_API_KEY: str = Field("", validation_alias=AliasChoices("GEMINI_API_KEY"))
+    FORENSICS_MODEL: str = Field("gemini-2.5-flash", validation_alias=AliasChoices("FORENSICS_MODEL"))
+
     # Kafka (sentinel events -> Postgres writer). Writer is disabled when unset.
     KAFKA_BOOTSTRAP_SERVERS: str = Field("", validation_alias=AliasChoices("KAFKA_BOOTSTRAP_SERVERS"))
     KAFKA_TOPIC: str = Field("canary-events", validation_alias=AliasChoices("KAFKA_TOPIC"))
