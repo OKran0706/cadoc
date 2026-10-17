@@ -86,7 +86,7 @@ async def mark_agent_online(company_slug: str, agent_id: str):
                 text(f"""
                     UPDATE "client_{company_slug}".sentinel_agents 
                     SET status = 'active', last_connected_at = now(), updated_at = now() 
-                    WHERE id = :agent_id AND status != 'active'
+                    WHERE id = :agent_id AND status NOT IN ('active', 'decommissioned')
                 """),
                 {"agent_id": agent_id}
             )
@@ -136,7 +136,7 @@ async def mark_agent_offline(company_slug: str, agent_id: str):
                 text(f"""
                     UPDATE "client_{company_slug}".sentinel_agents 
                     SET status = 'offline', updated_at = now() 
-                    WHERE id = :agent_id AND status != 'offline'
+                    WHERE id = :agent_id AND status NOT IN ('offline', 'decommissioned')
                 """),
                 {"agent_id": agent_id}
             )

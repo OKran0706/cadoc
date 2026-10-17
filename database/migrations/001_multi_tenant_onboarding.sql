@@ -370,7 +370,7 @@ BEGIN
             last_connected_at TIMESTAMPTZ,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            CONSTRAINT sentinel_agents_status_chk CHECK (status IN ('active', 'offline', 'degraded'))
+            CONSTRAINT sentinel_agents_status_chk CHECK (status IN ('active', 'offline', 'degraded', 'decommissioned'))
         )
     $ddl$, v_schema_name, v_schema_name);
 

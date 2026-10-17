@@ -67,6 +67,32 @@ def _extract_client_id(request: Request) -> str:
         cn = cn.removesuffix(".canary.local")
     return cn
 
+def _agent_uuid(sentinel_id: str) -> str:
+    """Agent id as stored by the platform: the UUID itself, or a stable uuid5 for non-UUID ids."""
+    import uuid
+    try:
+        uuid.UUID(sentinel_id)
+        return sentinel_id
+    except ValueError:
+        return str(uuid.uuid5(uuid.NAMESPACE_DNS, sentinel_id))
+
+
+async def _is_revoked(cert_id: str) -> bool:
+    """True if the cert identity was decommissioned (platform sets agent:revoked:{id}).
+
+    ponytail: fails open if Redis is unreachable (keeps telemetry flowing); fail closed if
+    decommission must hold during a Redis outage. The cert itself stays valid until it expires.
+    """
+    ident = parse_agent_cn(cert_id)
+    if not ident:
+        return False
+    try:
+        return bool(await liveness_mgr.redis.exists(f"agent:revoked:{_agent_uuid(ident[1])}"))
+    except Exception as e:
+        logger.error(f"REVOKE_CHECK_FAILED: {e}")
+        return False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Initialize Kafka Producer with retries
@@ -141,6 +167,10 @@ async def handle_ingest(
         logger.warning(f"IDENTITY_MISMATCH: payload id={claimed_id!r} cert={cert_id!r}")
         raise HTTPException(status_code=403, detail="Payload identity does not match client certificate")
 
+    if await _is_revoked(cert_id):
+        logger.warning(f"DECOMMISSIONED_AGENT_REJECTED: {cert_id}")
+        raise HTTPException(status_code=403, detail="Agent has been decommissioned")
+
     sentinel_id = payload_data.get("id", envelope.key_id)
     sentinel_ts = payload_data.get("ts")
     event_type = payload_data.get("type", "UNKNOWN")
@@ -170,11 +200,7 @@ async def handle_ingest(
 
         company_slug, resolved_sentinel_id = identity
 
-        import uuid
-        try:
-            uuid.UUID(resolved_sentinel_id)
-        except ValueError:
-            resolved_sentinel_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, resolved_sentinel_id))
+        resolved_sentinel_id = _agent_uuid(resolved_sentinel_id)
 
         # Synchronous-path update (Redis is low latency)
         await liveness_mgr.update_liveness(resolved_sentinel_id, envelope.payload, company_slug=company_slug)

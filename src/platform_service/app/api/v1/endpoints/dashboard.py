@@ -122,6 +122,7 @@ class AgentResponse(BaseModel):
 
 @router.get("/agents", response_model=list[AgentResponse])
 async def list_agents(
+    include_decommissioned: bool = False,
     db: AsyncSession = Depends(get_db_session),
     admin_claims: dict = Depends(verify_user_jwt)
 ):
@@ -141,9 +142,10 @@ async def list_agents(
     sql = f"""
         SELECT id, server_id, version, git_commit, status, last_connected_at::text
         FROM "client_{company_slug}".sentinel_agents
+        WHERE :all OR status != 'decommissioned'
         ORDER BY last_connected_at DESC NULLS LAST, id DESC
     """
-    result = await db.execute(text(sql))
+    result = await db.execute(text(sql), {"all": include_decommissioned})
     rows = result.fetchall()
 
     return [

@@ -31,7 +31,7 @@ async def decommission_agent(
 ):
     """
     Decommissions a Sentinel agent:
-    1. Updates Postgres status to 'offline' within the client schema.
+    1. Updates Postgres status to 'decommissioned' within the client schema.
     2. Writes agent ID blacklist entry in Redis.
     3. Adds audit entry into global log.
     """
@@ -59,12 +59,12 @@ async def decommission_agent(
         await db.execute(
             text(f"""
                 UPDATE "client_{company_slug}".sentinel_agents 
-                SET status = 'offline', updated_at = now() 
+                SET status = 'decommissioned', updated_at = now()
                 WHERE id = :agent_id
             """),
             {"agent_id": agent_id}
         )
-        
+
         # 2. Log to Global Audit
         payload_data = {"agent_id": agent_id, "action": "decommissioned"}
         await db.execute(
@@ -98,7 +98,7 @@ async def recommission_agent(
 ):
     """
     Recommissions a decommissioned Sentinel agent:
-    1. Updates Postgres status back to 'active' within the client schema.
+    1. Updates Postgres status to 'offline' (the next heartbeat makes it 'active').
     2. Deletes agent ID blacklist entry from Redis.
     3. Adds audit entry into global log.
     """
@@ -126,7 +126,7 @@ async def recommission_agent(
         await db.execute(
             text(f"""
                 UPDATE "client_{company_slug}".sentinel_agents 
-                SET status = 'active', updated_at = now() 
+                SET status = 'offline', updated_at = now()
                 WHERE id = :agent_id
             """),
             {"agent_id": agent_id}

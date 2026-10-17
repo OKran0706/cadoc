@@ -97,11 +97,13 @@ async def create_server(
 @router.get("/", response_model=List[ServerResponse])
 async def list_servers(
     company_slug: Optional[str] = None,
+    include_decommissioned: bool = False,
     db: AsyncSession = Depends(get_db_session),
     admin: dict = Depends(RequirePermission("server.read"))
 ):
     """
-    Lists all servers in the tenant's schema.
+    Lists servers in the tenant's schema. Servers whose agent was decommissioned are
+    hidden unless include_decommissioned=true.
     """
     caller_slug = admin["company_slug"]
     if caller_slug == "global":
@@ -120,9 +122,13 @@ async def list_servers(
         result = await db.execute(
             text(f"""
                 SELECT id::text, project_id::text, hostname, ip_address::text, status, specs, created_at::text, updated_at::text
-                FROM "client_{target_slug}".servers
+                FROM "client_{target_slug}".servers s
+                WHERE :all OR NOT EXISTS (
+                    SELECT 1 FROM "client_{target_slug}".sentinel_agents a
+                    WHERE a.server_id = s.id AND a.status = 'decommissioned')
                 ORDER BY created_at DESC
-            """)
+            """),
+            {"all": include_decommissioned},
         )
         rows = result.fetchall()
         return [

@@ -174,6 +174,19 @@ async def test_agent_decommission_lifecycle(monkeypatch):
     
     # Verify blacklist key set in Redis
     mock_redis.set.assert_called_with("agent:revoked:agent-uuid-456", "true")
+    # Status is 'decommissioned' (not just 'offline') so lists can filter it and liveness can't revive it
+    update_sql = [str(c.args[0]) for c in local_mock_db.execute.call_args_list if "UPDATE" in str(c.args[0])]
+    assert any("status = 'decommissioned'" in q for q in update_sql)
+
+
+def test_liveness_never_revives_decommissioned_and_lists_hide_them():
+    import inspect
+    from app.services import liveness
+    from app.api.v1.endpoints import servers, dashboard
+    assert "NOT IN ('active', 'decommissioned')" in inspect.getsource(liveness.mark_agent_online)
+    assert "NOT IN ('offline', 'decommissioned')" in inspect.getsource(liveness.mark_agent_offline)
+    assert "status = 'decommissioned'" in inspect.getsource(servers.list_servers)
+    assert "!= 'decommissioned'" in inspect.getsource(dashboard.list_agents)
 
 @pytest.mark.asyncio
 async def test_login_non_email_admin():
