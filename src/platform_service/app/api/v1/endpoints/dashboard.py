@@ -21,6 +21,24 @@ import io
 
 router = APIRouter()
 
+
+def memory_gb(metrics: dict):
+    """(used_gb, total_gb) from a heartbeat's metrics, or (None, None).
+
+    The agent reports bytes (memory_used_bytes / memory_total_bytes); older/mock heartbeats carry
+    memory_percent + memory_total in GB. Reading only the legacy keys left memory blank.
+    """
+    gib = 1024 ** 3
+    total_b, used_b = metrics.get("memory_total_bytes"), metrics.get("memory_used_bytes")
+    if total_b:
+        pct = metrics.get("memory_percent")
+        used = used_b if used_b is not None else (total_b * pct / 100 if pct is not None else None)
+        return (round(used / gib, 2) if used is not None else None), round(total_b / gib, 2)
+    total, pct = metrics.get("memory_total"), metrics.get("memory_percent")
+    if total is not None and pct is not None:
+        return round(pct / 100 * total, 2), total
+    return None, None
+
 class AlertPayload(BaseModel):
     id: str
     server_id: str
@@ -414,10 +432,7 @@ async def list_nodes_inventory(
                     if metrics:
                         status = "online"
                         cpu = metrics.get("cpu_percent")
-                        mem_percent = metrics.get("memory_percent")
-                        memory_total = metrics.get("memory_total")
-                        if mem_percent is not None and memory_total is not None:
-                            memory_used = round((mem_percent / 100) * memory_total, 2)
+                        memory_used, memory_total = memory_gb(metrics)
                 except Exception:
                     pass
             
@@ -685,10 +700,8 @@ async def export_telemetry_csv(
                             metrics = hb_data.get("metrics")
                             if metrics:
                                 cpu = f"{metrics.get('cpu_percent', '')}%"
-                                mem_percent = metrics.get('memory_percent')
-                                memory_total = metrics.get('memory_total')
-                                if mem_percent is not None and memory_total is not None:
-                                    memory_used = round((mem_percent / 100) * memory_total, 2)
+                                memory_used, memory_total = memory_gb(metrics)
+                                if memory_used is not None and memory_total is not None:
                                     mem = f"{memory_used} GB / {memory_total} GB"
                         except Exception:
                             pass

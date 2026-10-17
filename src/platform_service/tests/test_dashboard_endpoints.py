@@ -518,3 +518,14 @@ async def test_sse_stream_server_filter(monkeypatch):
                 if line.startswith("data:"):
                     seen.append(json.loads(line[5:]))
     assert [m["server_id"] for m in seen] == [mine]  # the other server's heartbeat was filtered out
+
+
+def test_memory_gb_reads_the_agents_byte_fields():
+    from app.api.v1.endpoints.dashboard import memory_gb
+    gib = 1024 ** 3
+    # Exact shape sentinel-a sends (cmd/sentinel-a/main.go): bytes + percent
+    agent = {"cpu_percent": 5.0, "memory_total_bytes": 16 * gib, "memory_used_bytes": 4 * gib, "memory_percent": 25.0}
+    assert memory_gb(agent) == (4.0, 16.0)
+    assert memory_gb({"memory_total_bytes": 8 * gib, "memory_percent": 50.0}) == (4.0, 8.0)  # no used_bytes: derive
+    assert memory_gb({"memory_percent": 26.25, "memory_total": 16.0}) == (4.2, 16.0)         # legacy/mock shape
+    assert memory_gb({"cpu_percent": 1.0}) == (None, None)
