@@ -332,6 +332,18 @@ func main() {
 				if event.DestPath != "" {
 					auditMap["dest_path"] = event.DestPath
 				}
+				for k, v := range map[string]string{"comm": event.Comm, "exe": event.Exe, "cwd": event.CWD,
+					"auid": event.AUID, "ses": event.Session, "tty": event.TTY, "src_ip": event.SrcIP,
+					"user": event.User, "login_user": event.LoginUser, "parent_comm": event.ParentComm,
+					"exit": event.Exit, "cmdline": event.Cmdline} {
+					if v != "" {
+						auditMap[k] = v
+					}
+				}
+				auditMap["uid"] = event.UID
+				auditMap["tid"] = event.TID
+				auditMap["ppid"] = event.PPID
+				auditMap["success"] = event.Success
 
 				envelope, _, err := s.SignEvent(auditMap)
 				if err != nil {

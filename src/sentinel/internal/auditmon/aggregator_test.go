@@ -18,6 +18,7 @@ var catEvent = []string{ // `cat /opt/app/config/.env.staging` (read-only open)
 	`type=SYSCALL msg=audit(1792233937.526:1246): arch=c00000b7 syscall=56 success=yes exit=3 a0=ffffffffffffff9c a1=ffffe5732c48 a2=80000 a3=0 items=1 ppid=1469213 pid=1469215 auid=1000 uid=0 gid=0 euid=0 suid=0 fsuid=0 egid=0 sgid=0 fsgid=0 tty=(none) ses=196 comm="cat" exe="/usr/lib/cargo/bin/coreutils/cat" subj=unconfined key="sys-integrity"` + interp,
 	`type=CWD msg=audit(1792233937.526:1246): cwd="/home/ubuntu/cadoc"`,
 	`type=PATH msg=audit(1792233937.526:1246): item=0 name="/opt/app/config/.env.staging" inode=546719 dev=103:01 mode=0100644 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0`,
+	`type=PROCTITLE msg=audit(1792233937.526:1246): proctitle=636174002F6F70742F6170702F636F6E6669672F2E656E762E73746167696E67`, // "cat /opt/app/config/.env.staging"
 }
 
 var agentCreate = []string{ // the agent itself creating a decoy: openat O_WRONLY|O_CREAT|O_TRUNC (a2=0x80241)
@@ -72,6 +73,9 @@ func TestReadOfDecoyIsOpenWithPID(t *testing.T) {
 	if e.Op != "OPEN" {
 		t.Errorf("op = %q, want OPEN (openat, read-only)", e.Op)
 	}
+	if e.Cmdline != "cat /opt/app/config/.env.staging" || e.PPID != 1469213 || !e.Success || e.Exit != "3" || e.User != "root" {
+		t.Errorf("process info wrong: cmdline=%q ppid=%d success=%v exit=%q user=%q", e.Cmdline, e.PPID, e.Success, e.Exit, e.User)
+	}
 }
 
 // The agent's own create is seen BEFORE the canary map contains the new path (map is set after deploy),
@@ -105,6 +109,7 @@ func TestRelativePathResolvedAgainstCWD(t *testing.T) {
 		`type=SYSCALL msg=audit(1792236000.100:2000): arch=c00000b7 syscall=56 success=yes exit=3 a0=ffffffffffffff9c a1=1 a2=80000 a3=0 items=1 ppid=1 pid=4242 auid=1000 uid=0 gid=0 euid=0 suid=0 fsuid=0 egid=0 sgid=0 fsgid=0 tty=(none) ses=1 comm="cat" exe="/usr/bin/cat" key="sys-integrity"`,
 		`type=CWD msg=audit(1792236000.100:2000): cwd="/etc/app"`,
 		`type=PATH msg=audit(1792236000.100:2000): item=0 name="config.yml.old" inode=3540 dev=103:01 mode=0100644 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL`,
+			`type=PROCTITLE msg=audit(1792236000.100:2000): proctitle="cat"`,
 	})
 	e := next(t, a, time.Second)
 	if e == nil {
@@ -156,5 +161,20 @@ func TestOpFor(t *testing.T) {
 		if got := opFor(c.f); got != c.want {
 			t.Errorf("opFor(%v) = %q, want %q", c.f, got, c.want)
 		}
+	}
+}
+
+func TestSSHSourceIPFromUserStart(t *testing.T) {
+	a := NewAggregator(300*time.Millisecond, 100, 10)
+	defer a.Stop()
+	a.SetWatchPaths([]string{"/opt/app/config/.env.staging"})
+	feed(t, a, []string{
+		`type=USER_START msg=audit(1792233900.100:1200): pid=1469000 uid=0 auid=1000 ses=196 subj=unconfined msg='op=PAM:session_open grantors=pam_loginuid acct="ubuntu" exe="/usr/sbin/sshd" hostname=? addr=203.0.113.7 terminal=ssh res=success'`,
+		`type=USER_START msg=audit(1792233910.100:1201): pid=1469100 uid=1000 auid=1000 ses=196 subj=unconfined msg='op=PAM:session_open acct="root" exe="/usr/bin/sudo" hostname=? addr=? terminal=/dev/pts/0 res=success'`,
+	})
+	feed(t, a, catEvent) // ses=196
+	e := next(t, a, time.Second)
+	if e == nil || e.SrcIP != "203.0.113.7" || e.AUID != "1000" || e.Session != "196" {
+		t.Fatalf("want src_ip 203.0.113.7 (sudo's addr=? must not overwrite it), got %+v", e)
 	}
 }

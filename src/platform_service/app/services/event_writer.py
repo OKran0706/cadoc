@@ -133,7 +133,7 @@ async def _handle_file_event(session, slug: str, server_id: str, payload: dict) 
         logger.info("EVENT_WRITER: file event on non-decoy path %s ignored", path)
         return None
     op = payload.get("op", "")
-    details = {k: payload.get(k) for k in ("op", "path", "dest_path", "pid", "audit_id", "confidence", "host") if payload.get(k) is not None}
+    details = {k: payload.get(k) for k in ("op", "path", "dest_path", "pid", "tid", "uid", "auid", "ses", "tty", "src_ip", "user", "login_user", "ppid", "parent_comm", "success", "exit", "cmdline", "comm", "exe", "cwd", "audit_id", "confidence", "host") if payload.get(k) is not None}
     details["decoy_id"] = str(decoy.id)
     live = await _insert_alert(session, slug, server_id, "DECOY_TAMPER", file_severity(op), details, parse_ts(payload.get("ts")))
     await session.execute(

@@ -5,8 +5,12 @@ package auditmon
 
 import (
 	"fmt"
+	"encoding/hex"
 	"log"
+	"os"
+	"os/user"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,7 +36,18 @@ type AuditEvent struct {
 	PID        int                    `json:"pid"`
 	TID        int                    `json:"tid"`
 	UID        int                    `json:"uid"`
-	Comm       string                 `json:"comm"`
+	AUID       string                 `json:"auid,omitempty"` // login uid; 4294967295 = no login session
+	Session    string                 `json:"ses,omitempty"`
+	TTY        string                 `json:"tty,omitempty"`
+	SrcIP      string                 `json:"src_ip,omitempty"` // remote address of the SSH login that owns Session
+	User       string                 `json:"user,omitempty"`       // name for UID
+	LoginUser  string                 `json:"login_user,omitempty"` // name for AUID: the person who logged in
+	PPID       int                    `json:"ppid,omitempty"`
+	ParentComm string                 `json:"parent_comm,omitempty"` // read from /proc at event time; empty if the parent already exited
+	Success    bool                   `json:"success"`
+	Exit       string                 `json:"exit,omitempty"`    // syscall return; negative = errno (e.g. -13 denied)
+	Cmdline    string                 `json:"cmdline,omitempty"` // decoded PROCTITLE
+	Comm      string                 `json:"comm"`
 	Exe        string                 `json:"exe"`
 	Path       string                 `json:"path"`
 	DestPath   string                 `json:"dest_path,omitempty"`
@@ -40,6 +55,125 @@ type AuditEvent struct {
 	Op         string                 `json:"op"`         // e.g. READ, WRITE, RENAME, DELETE
 	Confidence Confidence             `json:"confidence"`
 	RawRecords []map[string]string    `json:"-"` // Hidden from JSON by default
+}
+
+// fillProcess copies who/what/how-it-went from a SYSCALL record. Caller holds a.mu.
+func (a *Aggregator) fillProcess(e *AuditEvent, fields map[string]string) {
+	e.AUID, e.Session, e.TTY = fields["auid"], fields["ses"], fields["tty"]
+	e.SrcIP = a.srcIP(e.Session)
+	e.User = a.userName(fields["uid"])
+	if e.AUID != "4294967295" {
+		e.LoginUser = a.userName(e.AUID)
+	}
+	fmt.Sscanf(fields["ppid"], "%d", &e.PPID)
+	if e.PPID > 0 {
+		if b, err := os.ReadFile("/proc/" + strconv.Itoa(e.PPID) + "/comm"); err == nil {
+			e.ParentComm = strings.TrimSpace(string(b))
+		}
+	}
+	e.Success = fields["success"] == "yes"
+	e.Exit = fields["exit"]
+}
+
+// userName resolves a numeric uid to a login name ("" if unknown), cached.
+func (a *Aggregator) userName(uid string) string {
+	if uid == "" {
+		return ""
+	}
+	if n, ok := a.names[uid]; ok {
+		return n
+	}
+	name := ""
+	if u, err := user.LookupId(uid); err == nil {
+		name = u.Username
+	}
+	if len(a.names) >= 1024 { // ponytail: reset when full
+		a.names = make(map[string]string)
+	}
+	a.names[uid] = name
+	return name
+}
+
+// decodeProctitle turns a PROCTITLE record into a command line. The kernel hex-encodes the value
+// (NUL-separated argv) unless it is a plain quoted string. Capped so one huge argv cannot bloat alerts.
+func decodeProctitle(rec *auparse.AuditMessage) string {
+	if rec == nil {
+		return ""
+	}
+	i := strings.Index(rec.RawData, "proctitle=")
+	if i < 0 {
+		return ""
+	}
+	v := rec.RawData[i+len("proctitle="):]
+	if j := strings.IndexByte(v, ' '); j >= 0 {
+		v = v[:j]
+	}
+	if strings.HasPrefix(v, `"`) {
+		v = strings.Trim(v, `"`)
+	} else if b, err := hex.DecodeString(v); err == nil {
+		v = strings.TrimSpace(strings.ReplaceAll(string(b), "\x00", " "))
+	}
+	if len(v) > 512 {
+		v = v[:512] + "..."
+	}
+	return v
+}
+
+var (
+	sesRe  = regexp.MustCompile(`\bses=(\d+)`)
+	addrRe = regexp.MustCompile(`\baddr=([0-9a-fA-F:.]+)`)
+)
+
+// noteLogin remembers the remote address of a login session. sshd's USER_START (1105) and
+// USER_LOGIN (1112) records carry ses= and addr=; sudo/su/cron records for the same session carry
+// addr=? and are ignored so they cannot overwrite it. Caller holds a.mu.
+func (a *Aggregator) noteLogin(raw string) {
+	ses, addr := sesRe.FindStringSubmatch(raw), addrRe.FindStringSubmatch(raw)
+	if ses == nil || addr == nil {
+		return
+	}
+	if len(a.sessions) >= 4096 { // ponytail: reset when full, per-entry expiry if churn matters
+		a.sessions = make(map[string]string)
+	}
+	a.sessions[ses[1]] = addr[1]
+}
+
+// srcIP returns the SSH client address for an audit session id, or "". Sessions that began before
+// the plugin started were never seen in the audit stream, so fall back to the SSH_CONNECTION
+// variable of any live process in that session (cached, including misses). Caller holds a.mu.
+func (a *Aggregator) srcIP(ses string) string {
+	if ses == "" || ses == "4294967295" {
+		return ""
+	}
+	if ip, ok := a.sessions[ses]; ok {
+		return ip
+	}
+	ip := ipFromProc(ses)
+	a.sessions[ses] = ip
+	return ip
+}
+
+// ipFromProc scans /proc for a process of session ses and reads the client IP from its environment.
+// ponytail: full /proc scan on first sight of a session, acceptable at one per session.
+func ipFromProc(ses string) string {
+	dirs, _ := filepath.Glob("/proc/[0-9]*")
+	for _, d := range dirs {
+		if b, err := os.ReadFile(d + "/sessionid"); err != nil || strings.TrimSpace(string(b)) != ses {
+			continue
+		}
+		env, err := os.ReadFile(d + "/environ")
+		if err != nil {
+			continue
+		}
+		for _, kv := range strings.Split(string(env), "\x00") {
+			if v, ok := strings.CutPrefix(kv, "SSH_CONNECTION="); ok {
+				if f := strings.Fields(v); len(f) > 0 {
+					return f[0]
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // eventBuffer holds fragmented records for a single audit sequence.
@@ -69,6 +203,8 @@ type Aggregator struct {
 	emitChan   chan *AuditEvent
 	stopChan   chan struct{}
 	canaryMap  map[string]bool // Thread-safe set of paths to monitor
+	names      map[string]string    // uid -> user name cache
+	sessions   map[string]string    // audit session id -> SSH client address ("" = not an SSH session)
 	emitted    map[string]time.Time // recently emitted audit IDs: late fragments of them are dropped
 }
 
@@ -78,6 +214,8 @@ func NewAggregator(timeout time.Duration, maxBuffers int, emitChanSize int) *Agg
 		buffers:    make(map[string]*eventBuffer),
 		canaryMap:  make(map[string]bool),
 		emitted:    make(map[string]time.Time),
+		sessions:   make(map[string]string),
+		names:      make(map[string]string),
 		timeout:    timeout,
 		maxBuffers: maxBuffers,
 		emitChan:   make(chan *AuditEvent, emitChanSize),
@@ -110,6 +248,10 @@ func (a *Aggregator) ProcessRecord(rec *auparse.AuditMessage) {
 
 	// 11.02a: Manually parse the Audit ID and Metadata from the raw message
 	// Audit records look like: type=SYSCALL msg=audit(17137123.123:456): ...
+	if rec.RecordType == 1105 || rec.RecordType == 1112 { // USER_START, USER_LOGIN
+		a.noteLogin(rec.RawData)
+		return
+	}
 	auditID := extractAuditID(rec.RawData)
 
 	// Key: AuditID (it's unique per event across all processes/threads)
@@ -149,7 +291,7 @@ func (a *Aggregator) ProcessRecord(rec *auparse.AuditMessage) {
 		case "CWD":
 			recType = 1307
 		case "PROCTITLE":
-			recType = 1323
+			recType = 1327
 		}
 	}
 
@@ -161,6 +303,9 @@ func (a *Aggregator) ProcessRecord(rec *auparse.AuditMessage) {
 	case 1300: // AUDIT_SYSCALL
 		buf.syscall = rec
 		buf.syscallFields = fields
+		if fields["success"] == "" { // auparse's Data() omits success; take it from the raw line
+			fields["success"] = extractField(rec.RawData, "success")
+		}
 		fmt.Sscanf(fields["pid"], "%d", &buf.pid)
 		fmt.Sscanf(fields["tid"], "%d", &buf.tid)
 	case 1302: // AUDIT_PATH
@@ -169,7 +314,7 @@ func (a *Aggregator) ProcessRecord(rec *auparse.AuditMessage) {
 	case 1307: // AUDIT_CWD
 		buf.cwd = rec
 		buf.cwdFields = fields
-	case 1323: // AUDIT_PROCTITLE
+	case 1327: // AUDIT_PROCTITLE
 		buf.proctitle = rec
 	}
 
@@ -200,6 +345,12 @@ func (a *Aggregator) isComplete(buf *eventBuffer) bool {
 	}
 	// We require at least the syscall record + one path record for canary monitoring
 	if len(buf.paths) == 0 {
+		return false
+	}
+
+	// PROCTITLE is the last record of an event; wait for it so the command line is included.
+	// If it never comes, the janitor flushes the event as INCOMPLETE after the timeout.
+	if buf.proctitle == nil {
 		return false
 	}
 
@@ -256,6 +407,7 @@ func (a *Aggregator) emit(key string) {
 		fields := buf.syscallFields
 		event.Type = "AUDIT_SYSCALL"
 		fmt.Sscanf(fields["uid"], "%d", &event.UID)
+		a.fillProcess(event, fields)
 		event.Comm = strings.Trim(fields["comm"], "\"")
 		event.Exe = strings.Trim(fields["exe"], "\"")
 		fmt.Sscanf(fields["pid"], "%d", &event.PID)
@@ -264,6 +416,7 @@ func (a *Aggregator) emit(key string) {
 		}
 		event.Op = opFor(fields)
 	}
+	event.Cmdline = decodeProctitle(buf.proctitle)
 
 	// 2. Extract from PATH records
 	if len(buf.paths) > 0 {
@@ -370,10 +523,12 @@ func (a *Aggregator) emitPartialUnlocked(key string) {
 	if buf.syscall != nil {
 		fields := buf.syscallFields
 		fmt.Sscanf(fields["uid"], "%d", &event.UID)
+		a.fillProcess(event, fields)
 		event.Comm = strings.Trim(fields["comm"], "\"")
 		event.Exe = strings.Trim(fields["exe"], "\"")
 		event.Op = opFor(fields)
 	}
+	event.Cmdline = decodeProctitle(buf.proctitle)
 	select {
 	case a.emitChan <- event:
 	default:

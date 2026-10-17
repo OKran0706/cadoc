@@ -1,3 +1,4 @@
+import json
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import timezone
@@ -81,10 +82,13 @@ def test_map_deploy_replaces_previous_and_inserts(monkeypatch):
 def test_file_event_on_known_decoy_raises_alert_and_marks_tampered(monkeypatch):
     s = FakeSession(rows={"FROM \"client_mock-acme\".canary_decoy_files": MagicMock(id="decoy-1")})
     payload = {"type": "SENTINEL_FILE_READ", "op": "READ", "path": "/etc/app/a.bak", "pid": 42,
-               "audit_id": "1:2", "confidence": "high", "ts": "2026-10-17T10:00:00.5Z"}
+               "audit_id": "1:2", "confidence": "high", "ts": "2026-10-17T10:00:00.5Z",
+               "comm": "cat", "exe": "/usr/bin/cat", "uid": 0, "auid": "1000", "ses": "3", "tty": "pts0"}
     run(IDENT, payload, s, monkeypatch)
     alert = sqls(s, "INSERT INTO \"client_mock-acme\".tamper_alerts")
     assert len(alert) == 1
+    d = json.loads(alert[0][1]["details"])
+    assert d["exe"] == "/usr/bin/cat" and d["uid"] == 0 and d["auid"] == "1000" and d["tty"] == "pts0"
     assert alert[0][1]["etype"] == "DECOY_TAMPER" and alert[0][1]["sev"] == "high"
     assert len(sqls(s, "ensure_monthly_range_partition")) == 1
     assert len(sqls(s, "SET status = 'tampered'")) == 1
