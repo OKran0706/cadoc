@@ -25,6 +25,7 @@ const (
 	digitMark    = '' // private-use base; digitMark+k stands for a run of k digits while training
 	maxDigitRun  = 15
 	sampleTries  = 40
+	minRepeat    = 3 // shortest block (runes) treated as a degenerate repeat while sampling
 	mutationOdds = 4 // 1-in-N chance to prefer a sibling-derived backup name
 )
 
@@ -58,7 +59,7 @@ func validName(name, dir string, siblings []string, used map[string]bool) bool {
 	if strings.Trim(name, ".") == "" || strings.Contains(name, "..") {
 		return false
 	}
-	if strings.ContainsAny(name, `/\`) {
+	if strings.ContainsAny(name, `/\`) || repeatedSegment(name) {
 		return false
 	}
 	for _, r := range name {
@@ -154,9 +155,35 @@ func (m *ngram) sample(rng *rand.Rand, maxLen int) string {
 			break
 		}
 		out = append(out, r)
+		if k := repeatTail(out); k > 0 { // break Markov cycles like ".env.env.env"
+			out = out[:len(out)-k]
+			break
+		}
 		ctx = append(append([]rune{}, ctx[1:]...), r)
 	}
 	return string(out)
+}
+
+// repeatTail returns the length of a block (>= minRepeat runes) that out ends with twice in a
+// row, or 0.
+func repeatTail(out []rune) int {
+	for k := minRepeat; 2*k <= len(out); k++ {
+		if string(out[len(out)-k:]) == string(out[len(out)-2*k:len(out)-k]) {
+			return k
+		}
+	}
+	return 0
+}
+
+// repeatedSegment reports a name with identical adjacent dot-separated segments (a.env.env).
+func repeatedSegment(name string) bool {
+	p := strings.Split(name, ".")
+	for i := 1; i < len(p); i++ {
+		if p[i] != "" && p[i] == p[i-1] {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizeDigits collapses each digit run into one token carrying its length, so the model

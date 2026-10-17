@@ -53,6 +53,7 @@ func TestValidNameRejects(t *testing.T) {
 		"leading-space":   " id_rsa",
 		"trailing-space":  "id_rsa ",
 		"control-char":    "id\x07rsa",
+		"repeated-seg":    "app.config.yml.env.env.env",
 	}
 	for name, in := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -75,6 +76,16 @@ func TestValidNameAccepts(t *testing.T) {
 func TestValidNameNilUsedMapDoesNotPanic(t *testing.T) {
 	if !validName("ok.bak", t.TempDir(), nil, nil) {
 		t.Fatal("expected ok.bak valid with nil used map")
+	}
+}
+
+func TestSampleBreaksRepeatLoop(t *testing.T) {
+	m := newNgram(ngramOrder)
+	m.train("app.config.yml.env.env.env.env.env.env.env.env") // no EOS-reachable exit but a cycle
+	for seed := int64(0); seed < 50; seed++ {
+		if s := m.sample(newRNG(seed), maxNameLen); repeatTail([]rune(s)) != 0 {
+			t.Fatalf("seed %d: sample %q ends in a repeated block", seed, s)
+		}
 	}
 }
 
