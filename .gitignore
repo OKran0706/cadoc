@@ -31,3 +31,33 @@ cadoc-deploy.tar.gz
 # Sentinel release artifacts (built by scripts/build-release.sh)
 deploy/downloads/
 deploy/certs/
+
+# AI-assistant tooling / planning scaffolding
+.codex/
+.gemini/
+.skills/
+.clinerules
+agents/
+gsd-file-manifest.json
+graphify-out/
+
+# Build artifacts, coverage, lockfile stubs
+sentinel-a
+sentinel-a-granular
+.coverage
+.pytest_cache/
+package-lock.json
+*.tar.gz
+
+# Test keys / certs (regenerate with test-env/generate-certs.ps1)
+*.key
+*.csr
+*.srl
+*.pem
+test-env/certs/
+test-env/*.log
+mock-server*.log
+
+.vagrant/
+test-env/sentinel-a
+test-env/test-agg
