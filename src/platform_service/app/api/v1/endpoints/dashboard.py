@@ -24,6 +24,7 @@ router = APIRouter()
 class AlertPayload(BaseModel):
     id: str
     server_id: str
+    hostname: Optional[str] = None
     event_type: str
     severity: str
     details: dict
@@ -72,7 +73,8 @@ async def get_alerts(
     # Dynamic cursor query execution
     # Prunes unused monthly tables by directly searching partition key detected_at
     sql = f"""
-        SELECT id, server_id, event_type, severity, details, detected_at::text
+        SELECT id, server_id, event_type, severity, details, detected_at::text,
+               (SELECT s.hostname FROM "client_{company_slug}".servers s WHERE s.id = tamper_alerts.server_id) AS hostname
         FROM "client_{company_slug}".tamper_alerts
         WHERE 1=1
         {pruning_limit}
@@ -101,6 +103,7 @@ async def get_alerts(
         AlertPayload(
             id=str(r.id),
             server_id=str(r.server_id),
+            hostname=r.hostname,
             event_type=r.event_type,
             severity=r.severity,
             details=r.details,
@@ -114,6 +117,7 @@ async def get_alerts(
 class AgentResponse(BaseModel):
     id: str
     server_id: str
+    hostname: Optional[str] = None
     version: Optional[str]
     git_commit: Optional[str]
     status: str
@@ -140,7 +144,8 @@ async def list_agents(
         raise HTTPException(status_code=400, detail="Invalid tenant identifier")
 
     sql = f"""
-        SELECT id, server_id, version, git_commit, status, last_connected_at::text
+        SELECT id, server_id, version, git_commit, status, last_connected_at::text,
+               (SELECT s.hostname FROM "client_{company_slug}".servers s WHERE s.id = sentinel_agents.server_id) AS hostname
         FROM "client_{company_slug}".sentinel_agents
         WHERE :all OR status != 'decommissioned'
         ORDER BY last_connected_at DESC NULLS LAST, id DESC
@@ -152,6 +157,7 @@ async def list_agents(
         AgentResponse(
             id=str(r.id),
             server_id=str(r.server_id),
+            hostname=r.hostname,
             version=r.version,
             git_commit=r.git_commit,
             status=r.status,
@@ -187,7 +193,9 @@ async def get_agents_metrics(
                     break
 
                 sql = f"""
-                    SELECT id, server_id, status FROM "client_{company_slug}".sentinel_agents
+                    SELECT a.id, a.server_id, a.status, s.hostname
+                    FROM "client_{company_slug}".sentinel_agents a
+                    LEFT JOIN "client_{company_slug}".servers s ON s.id = a.server_id
                 """
                 result = await db.execute(text(sql))
                 agents = result.fetchall()
@@ -210,6 +218,7 @@ async def get_agents_metrics(
                     
                     metrics_payload[str(agent_id)] = {
                         "server_id": str(agent.server_id),
+                        "hostname": agent.hostname,
                         "status": status,
                         "metrics": metrics
                     }
@@ -340,6 +349,7 @@ async def get_summary_kpis(
 
 class NodeInventoryResponse(BaseModel):
     id: str
+    hostname: Optional[str] = None
     location: str
     ip: str
     status: str
@@ -413,6 +423,7 @@ async def list_nodes_inventory(
             
             nodes.append(NodeInventoryResponse(
                 id=str(row.agent_id),
+                hostname=row.hostname,
                 location=row.location,
                 ip=row.ip,
                 status=status,

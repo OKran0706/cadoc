@@ -13,6 +13,7 @@ router = APIRouter()
 class DecoyResponse(BaseModel):
     id: str
     server_id: str
+    hostname: Optional[str] = None
     file_path: str
     decoy_type: str
     original_hash: str
@@ -59,7 +60,8 @@ async def list_decoys(
         
     sql = f"""
         SELECT id, server_id, file_path, decoy_type, original_hash, status,
-               planted_at::text, last_verified::text, created_at::text, updated_at::text
+               planted_at::text, last_verified::text, created_at::text, updated_at::text,
+               (SELECT s.hostname FROM "client_{company_slug}".servers s WHERE s.id = canary_decoy_files.server_id) AS hostname
         FROM "client_{company_slug}".canary_decoy_files
         {where_clause}
         ORDER BY planted_at DESC, id DESC
@@ -73,6 +75,7 @@ async def list_decoys(
             DecoyResponse(
                 id=str(r.id),
                 server_id=str(r.server_id),
+                hostname=r.hostname,
                 file_path=r.file_path,
                 decoy_type=r.decoy_type,
                 original_hash=r.original_hash,
@@ -106,7 +109,8 @@ async def get_decoy(
     
     sql = f"""
         SELECT id, server_id, file_path, decoy_type, original_hash, status,
-               planted_at::text, last_verified::text, created_at::text, updated_at::text
+               planted_at::text, last_verified::text, created_at::text, updated_at::text,
+               (SELECT s.hostname FROM "client_{company_slug}".servers s WHERE s.id = canary_decoy_files.server_id) AS hostname
         FROM "client_{company_slug}".canary_decoy_files
         WHERE id = :decoy_id
     """
@@ -120,6 +124,7 @@ async def get_decoy(
         return DecoyResponse(
             id=str(r.id),
             server_id=str(r.server_id),
+            hostname=r.hostname,
             file_path=r.file_path,
             decoy_type=r.decoy_type,
             original_hash=r.original_hash,

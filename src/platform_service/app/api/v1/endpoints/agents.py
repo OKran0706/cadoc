@@ -13,6 +13,7 @@ from app.core.security import RequirePermission
 class AgentResponse(BaseModel):
     id: str
     server_id: str
+    hostname: Optional[str] = None
     version: str
     git_commit: str
     status: str
@@ -178,7 +179,8 @@ async def list_agents(
         result = await db.execute(
             text(f"""
                 SELECT id::text, server_id::text, version, git_commit, status, capabilities_proof,
-                       last_connected_at::text, created_at::text, updated_at::text
+                       last_connected_at::text, created_at::text, updated_at::text,
+                       (SELECT s.hostname FROM "client_{company_slug}".servers s WHERE s.id = sentinel_agents.server_id) AS hostname
                 FROM "client_{company_slug}".sentinel_agents
                 ORDER BY created_at DESC
             """)
@@ -188,6 +190,7 @@ async def list_agents(
             AgentResponse(
                 id=row.id,
                 server_id=row.server_id,
+                hostname=row.hostname,
                 version=row.version,
                 git_commit=row.git_commit,
                 status=row.status,

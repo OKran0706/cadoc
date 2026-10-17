@@ -109,6 +109,7 @@ async def test_decoys_listing_tenant_scoped(monkeypatch):
     mock_decoy_row = MagicMock(
         id="decoy-uuid-1",
         server_id="server-uuid-1",
+        hostname="web-01.internal",
         file_path="/var/www/html/login.php",
         decoy_type="web_page",
         original_hash="a"*64,
@@ -138,6 +139,7 @@ async def test_decoys_listing_tenant_scoped(monkeypatch):
     assert len(res_data) == 1
     assert res_data[0]["id"] == "decoy-uuid-1"
     assert res_data[0]["file_path"] == "/var/www/html/login.php"
+    assert res_data[0]["hostname"] == "web-01.internal"
     assert res_data[0]["status"] == "planted"
 
 @pytest.mark.asyncio

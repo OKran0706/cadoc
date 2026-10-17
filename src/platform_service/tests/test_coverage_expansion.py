@@ -1004,6 +1004,7 @@ async def test_dashboard_alerts_gaps(monkeypatch):
     mock_alert_row = MagicMock()
     mock_alert_row.id = "some-uuid-id"
     mock_alert_row.server_id = "server-uuid"
+    mock_alert_row.hostname = "web-01.internal"
     mock_alert_row.event_type = "tamper"
     mock_alert_row.severity = "high"
     mock_alert_row.details = {}

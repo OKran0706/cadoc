@@ -150,6 +150,7 @@ def _make_server_row(
 def _make_agent_row(
     aid="agent-uuid-1",
     server_id="srv-uuid-1",
+    hostname="web-01.internal",
     version="1.2.3",
     git_commit="abcdef1",
     status="active",
@@ -161,6 +162,7 @@ def _make_agent_row(
     row = MagicMock()
     row.id = aid
     row.server_id = server_id
+    row.hostname = hostname
     row.version = version
     row.git_commit = git_commit
     row.status = status
