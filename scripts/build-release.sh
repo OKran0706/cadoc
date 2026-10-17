@@ -23,6 +23,7 @@ cp -r "${ROOT}/config/profiles" "${STAGE}/profiles"
 tar -czf "${OUT}/sentinel-assets.tar.gz" -C "$STAGE" templates profiles
 
 cp -f "${ROOT}/scripts/install-sentinel.sh" "${OUT}/install-sentinel.sh"
+cp -f "${ROOT}/scripts/uninstall-sentinel.sh" "${OUT}/uninstall-sentinel.sh"
 if [ -f "${ROOT}/deploy/certs/ca.crt" ]; then
   cp -f "${ROOT}/deploy/certs/ca.crt" "${OUT}/ca.crt"
 else

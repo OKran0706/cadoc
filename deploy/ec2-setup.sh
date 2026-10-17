@@ -76,6 +76,7 @@ fi
 mkdir -p deploy/downloads
 cp -f deploy/certs/ca.crt deploy/downloads/ca.crt
 [ -f scripts/install-sentinel.sh ] && cp -f scripts/install-sentinel.sh deploy/downloads/install-sentinel.sh
+[ -f scripts/uninstall-sentinel.sh ] && cp -f scripts/uninstall-sentinel.sh deploy/downloads/uninstall-sentinel.sh
 
 # 3. Check for .env file
 if [ ! -f ".env" ]; then
