@@ -36,6 +36,10 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("INITIAL_ADMIN_PASSWORD")
     )
 
+    # Shared secret for service-to-service routes under /internal (ingestion -> platform).
+    # Empty disables them: the routes fail closed.
+    INTERNAL_API_TOKEN: str = Field("", validation_alias=AliasChoices("INTERNAL_API_TOKEN"))
+
     # Kafka (sentinel events -> Postgres writer). Writer is disabled when unset.
     KAFKA_BOOTSTRAP_SERVERS: str = Field("", validation_alias=AliasChoices("KAFKA_BOOTSTRAP_SERVERS"))
     KAFKA_TOPIC: str = Field("canary-events", validation_alias=AliasChoices("KAFKA_TOPIC"))

@@ -12,6 +12,6 @@ target_directories:
     canary_type: credentials
     count: 1
     blend_with: ""
-naming_strategy: realistic
+naming_strategy: ml
 timestamp_strategy: blend_neighbors
 permission_strategy: match_directory

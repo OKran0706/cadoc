@@ -26,6 +26,7 @@ import (
 	"github.com/your-org/canary/sentinel/internal/auth"
 	"github.com/your-org/canary/sentinel/internal/config"
 	"github.com/your-org/canary/sentinel/internal/deployer_daemon"
+	"github.com/your-org/canary/sentinel/internal/fingerprint"
 	"github.com/your-org/canary/sentinel/internal/ingestclient"
 	"github.com/your-org/canary/sentinel/internal/selfmon"
 	"github.com/your-org/canary/sentinel/internal/signer"
@@ -367,6 +368,9 @@ func main() {
 		}()
 	}
 
+	// Read the host fingerprint while still privileged (DMI product_uuid is root-only).
+	hostFP := fingerprint.Read(fingerprint.SlugOf(cfg.ClientID))
+
 	// 3. Drop capabilities after all initializations
 	if err := sysutil.DropCapabilitiesAfterInit(); err != nil {
 		log.Fatalf("Failed to drop capabilities: %v", err)
@@ -386,6 +390,13 @@ func main() {
 		log.Printf("[boot] Failed to marshal capability proof envelope: %v — skipping", err)
 	} else if err := ic.Post(ctx, payload); err != nil {
 		log.Printf("[boot] Failed to emit initial capability proof: %v", err)
+	}
+
+	// Let the backend recognise this machine if it is ever added a second time.
+	if hostFP == "" {
+		log.Printf("[boot] No usable host identity (machine-id) — skipping fingerprint")
+	} else if err := fingerprint.Emit(ctx, s, ic, hostFP); err != nil {
+		log.Printf("[boot] Failed to emit host fingerprint: %v", err)
 	}
 
 	// 5. Start internal Canary Deployer subsystem

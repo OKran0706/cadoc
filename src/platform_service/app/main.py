@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from app.core.config import settings
-from app.api.v1.endpoints import auth, onboarding, bootstrap, dashboard, keys, decoys, agents, admins, projects, servers
+from app.api.v1.endpoints import auth, onboarding, bootstrap, dashboard, keys, decoys, agents, admins, projects, servers, internal
 from app.services.liveness import listen_redis_heartbeat_expirations
 from app.services.event_writer import run_event_writer
 
@@ -94,6 +94,7 @@ app.include_router(agents.router, prefix="/api/v1/agents", tags=["agents"])
 app.include_router(admins.router, prefix="/api/v1/admins", tags=["admins"])
 app.include_router(projects.router, prefix="/api/v1/projects", tags=["projects"])
 app.include_router(servers.router, prefix="/api/v1/servers", tags=["servers"])
+app.include_router(internal.router, prefix="/internal/v1", tags=["internal"])
 
 @app.get("/health")
 def health_check():

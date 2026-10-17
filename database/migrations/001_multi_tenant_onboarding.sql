@@ -343,6 +343,7 @@ BEGIN
             ip_address INET NOT NULL,
             status VARCHAR(30) NOT NULL,
             specs JSONB NOT NULL DEFAULT '{}'::jsonb,
+            fingerprint VARCHAR(64),
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             CONSTRAINT servers_status_chk CHECK (status IN ('online', 'offline', 'maintenance', 'provisioning', 'pending'))
@@ -387,7 +388,7 @@ BEGIN
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             CONSTRAINT canary_decoy_files_hash_chk CHECK (original_hash ~ '^[A-Fa-f0-9]{64}$'),
-            CONSTRAINT canary_decoy_files_status_chk CHECK (status IN ('planted', 'tampered', 'cleaned_up', 'verification_failed'))
+            CONSTRAINT canary_decoy_files_status_chk CHECK (status IN ('planted', 'tampered', 'cleaned_up', 'verification_failed', 'orphaned'))
         )
     $ddl$, v_schema_name, v_schema_name);
 
@@ -403,7 +404,7 @@ BEGIN
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             PRIMARY KEY (id, detected_at),
-            CONSTRAINT tamper_alerts_event_type_chk CHECK (event_type IN ('DECOY_TAMPER', 'BINARY_TAMPER', 'AUDITD_RULE_DELETED', 'SYSTEM_INTEGRITY_FAIL')),
+            CONSTRAINT tamper_alerts_event_type_chk CHECK (event_type IN ('DECOY_TAMPER', 'BINARY_TAMPER', 'AUDITD_RULE_DELETED', 'SYSTEM_INTEGRITY_FAIL', 'DUPLICATE_FINGERPRINT')),
             CONSTRAINT tamper_alerts_severity_chk CHECK (severity IN ('low', 'medium', 'high', 'critical'))
         ) PARTITION BY RANGE (detected_at)
     $ddl$, v_schema_name, v_schema_name, v_schema_name);
@@ -431,6 +432,7 @@ BEGIN
     EXECUTE format('CREATE INDEX %I ON %I.users (email)', 'users_email_idx', v_schema_name);
     EXECUTE format('CREATE INDEX %I ON %I.api_keys (key_hash)', 'api_keys_key_hash_idx', v_schema_name);
     EXECUTE format('CREATE INDEX %I ON %I.servers (project_id)', 'servers_project_id_idx', v_schema_name);
+    EXECUTE format('CREATE INDEX %I ON %I.servers (fingerprint)', 'servers_fingerprint_idx', v_schema_name);
     EXECUTE format('CREATE INDEX %I ON %I.server_roles (role_id)', 'server_roles_role_id_idx', v_schema_name);
     EXECUTE format('CREATE INDEX %I ON %I.sentinel_agents (server_id)', 'sentinel_agents_server_id_idx', v_schema_name);
     EXECUTE format('CREATE INDEX %I ON %I.sentinel_agents (last_connected_at)', 'sentinel_agents_last_connected_at_idx', v_schema_name);

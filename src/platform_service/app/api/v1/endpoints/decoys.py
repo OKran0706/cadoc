@@ -48,7 +48,7 @@ async def list_decoys(
     params = {}
     conditions = []
     if status:
-        allowed_statuses = {'planted', 'tampered', 'cleaned_up', 'verification_failed'}
+        allowed_statuses = {'planted', 'tampered', 'cleaned_up', 'verification_failed', 'orphaned'}
         if status not in allowed_statuses:
             raise HTTPException(status_code=400, detail=f"Invalid status filter. Must be one of {allowed_statuses}")
         conditions.append("status = :status")

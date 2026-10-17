@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/your-org/canary/sentinel/internal/cleanup"
 	"github.com/your-org/canary/sentinel/internal/deployer"
 	"github.com/your-org/canary/sentinel/internal/ingestclient"
 	"github.com/your-org/canary/sentinel/internal/signer"
@@ -28,6 +29,28 @@ func StartDaemon(ctx context.Context, profileName, configDir, templateDir string
 
 	log.Printf("Canary Deployer Daemon started (Profile: %s, Mode: In-Memory)", profileName)
 
+	// Remove leftovers the backend still lists for this server (e.g. a previous sentinel was
+	// killed, or this host was re-added and merged into an earlier record). Non-fatal: the
+	// brute-force pass below still runs if the backend is unreachable. Runs every rotation too,
+	// because a merge is recorded asynchronously after startup.
+	sweep := func(active []deployer.CanaryEntry) {
+		sweepCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		ids, paths := map[string]bool{}, map[string]bool{}
+		for _, c := range active { // never sweep what this sentinel has planted and is tracking
+			ids[strings.ToLower(c.ID)], paths[c.Path] = true, true
+		}
+		fetch := func(c context.Context) ([]cleanup.Entry, error) {
+			entries, err := cleanup.Fetch(c, ic)
+			return cleanup.Without(entries, ids, paths), err
+		}
+		if n, err := cleanup.Sweep(sweepCtx, fetch, s, ic); err != nil {
+			log.Printf("Deployer Daemon: backend canary cleanup incomplete (resolved %d): %v", n, err)
+		} else if n > 0 {
+			log.Printf("Deployer Daemon: removed %d leftover canaries listed by the backend", n)
+		}
+	}
+
 	// 1. One-time brute-force cleanup on startup to remove orphans from previous runs
 	log.Println("Deployer Daemon: performing startup cleanup of orphaned canaries...")
 	removeOldCanariesBruteForce(profile)
@@ -40,6 +63,9 @@ func StartDaemon(ctx context.Context, profileName, configDir, templateDir string
 			log.Println("Canary Deployer Daemon stopping...")
 			return
 		default:
+			// 2b. Remove anything else the backend still lists for this server (cheap GET).
+			sweep(activeCanaries)
+
 			// 3. Deploy New Canaries
 			newCanaries, err := deployer.Deploy(profile, templateDir, false)
 			if err != nil {

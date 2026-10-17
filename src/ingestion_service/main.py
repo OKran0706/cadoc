@@ -3,6 +3,7 @@ import os
 import json
 import asyncio
 import re
+import urllib.request
 from contextlib import asynccontextmanager
 import hvac
 
@@ -34,6 +35,9 @@ VAULT_ADMIN_TOKEN = os.getenv("VAULT_ADMIN_TOKEN", "")
 JWT_SECRET = os.getenv("JWT_SECRET", "")
 # Separate secret for signing Bootstrap Join Tokens (key separation from user JWTs)
 BOOTSTRAP_JWT_SECRET = os.getenv("BOOTSTRAP_JWT_SECRET", "")
+# Service-to-service access to the platform's /internal routes (empty = feature disabled).
+INTERNAL_API_TOKEN = os.getenv("INTERNAL_API_TOKEN", "")
+PLATFORM_URL = os.getenv("PLATFORM_URL", "http://platform:8000").rstrip("/")
 
 # Initialization
 logging.basicConfig(level=logging.INFO)
@@ -379,3 +383,54 @@ async def get_killswitch(request: Request):
     except Exception as exc:
         logger.error("KILLSWITCH_FETCH_ERROR: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to fetch killswitch state")
+
+
+_CANARY_FIELDS = ("id", "path", "type", "sha256", "status")
+_MAX_PLATFORM_BODY = 1_000_000
+
+
+def _platform_get_canaries(slug: str, server_id: str) -> dict:
+    """Blocking call to the platform's internal canary list (run via asyncio.to_thread)."""
+    url = f"{PLATFORM_URL}/internal/v1/tenants/{slug}/servers/{server_id}/canaries"
+    req = urllib.request.Request(url, headers={"X-Internal-Token": INTERNAL_API_TOKEN}, method="GET")
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        body = resp.read(_MAX_PLATFORM_BODY + 1)
+    if len(body) > _MAX_PLATFORM_BODY:
+        raise ValueError("platform response too large")
+    return json.loads(body)
+
+
+@app.get("/control/canaries")
+async def get_canaries(request: Request):
+    """
+    Planted/tampered canaries the backend holds for the calling sentinel's server, so it can
+    remove leftovers. Tenant and server come only from the verified client-cert CN.
+    """
+    cert_id = _extract_client_id(request)
+    if not cert_id:
+        raise HTTPException(status_code=401, detail="Client identity could not be determined")
+    ident = parse_agent_cn(cert_id)
+    if not ident:
+        raise HTTPException(status_code=403, detail="Bad credentials — invalid certificate format")
+    if await _is_revoked(cert_id):
+        raise HTTPException(status_code=403, detail="Agent has been decommissioned")
+    if not INTERNAL_API_TOKEN:
+        raise HTTPException(status_code=503, detail="Canary registry not configured")
+
+    slug, sentinel_id = ident
+    try:
+        data = await asyncio.to_thread(_platform_get_canaries, slug, _agent_uuid(sentinel_id))
+        items = data["canaries"]
+        if not isinstance(items, list):
+            raise ValueError("canaries is not a list")
+    except Exception as exc:
+        logger.error("CANARY_REGISTRY_FETCH_FAILED: client=%s err=%s", cert_id, type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Canary registry unavailable")
+
+    canaries = [
+        {k: c[k] for k in _CANARY_FIELDS}
+        for c in items
+        if isinstance(c, dict) and all(isinstance(c.get(k), str) for k in _CANARY_FIELDS)
+    ]
+    logger.info("CANARY_LIST_FETCH: client=%s count=%d", cert_id, len(canaries))
+    return {"canaries": canaries}

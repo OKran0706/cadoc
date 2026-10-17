@@ -118,6 +118,7 @@ services:
       REDIS_URL: "redis://redis:6379/0"
       JWT_SECRET: ${JWT_SECRET:?JWT Secret required}
       BOOTSTRAP_JWT_SECRET: ${BOOTSTRAP_JWT_SECRET:?Bootstrap Secret required}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?Internal API token required}
       INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-admin@cadoc.io}
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:?Admin Password required}
       ENABLE_RATE_LIMIT: "true"
@@ -149,6 +150,8 @@ services:
       VAULT_ADMIN_TOKEN: ${VAULT_DEV_ROOT_TOKEN:-cadoc_vault_dev_root_token}
       JWT_SECRET: ${JWT_SECRET:?JWT Secret required}
       BOOTSTRAP_JWT_SECRET: ${BOOTSTRAP_JWT_SECRET:?Bootstrap Secret required}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?Internal API token required}
+      PLATFORM_URL: "http://platform-service:8000"
       PYTHONUNBUFFERED: "1"
     depends_on:
       redis:

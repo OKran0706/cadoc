@@ -127,8 +127,15 @@ func DetectProfile(configDir string) (string, error) {
 // Deploy generates and plants canary files based on a profile.
 func Deploy(profile *Profile, templateDir string, dryRun bool) ([]CanaryEntry, error) {
 	var entries []CanaryEntry
+	rng := newSeededRNG()
+	usedByDir := map[string]map[string]bool{}
 
 	for _, target := range profile.TargetDirectories {
+		used := usedByDir[target.Path]
+		if used == nil {
+			used = map[string]bool{}
+			usedByDir[target.Path] = used
+		}
 		for i := 0; i < target.Count; i++ {
 			canaryID := uuid.New().String()
 
@@ -139,7 +146,8 @@ func Deploy(profile *Profile, templateDir string, dryRun bool) ([]CanaryEntry, e
 			}
 
 			// Generate filename
-			filename := generateFilename(target.CanaryType, target.Path)
+			filename := pickFilename(profile.NamingStrategy, target.CanaryType, target.Path, used, rng)
+			used[filename] = true
 			outputPath := filepath.Join(target.Path, filename)
 
 			now := time.Now().UTC()
@@ -176,7 +184,7 @@ func Deploy(profile *Profile, templateDir string, dryRun bool) ([]CanaryEntry, e
 			content += fmt.Sprintf("\n# __CANARY_ID__=%s\n", canaryID)
 
 			// Write file
-			if err := os.WriteFile(outputPath, []byte(content), 0644); err != nil {
+			if err := plant(outputPath, content); err != nil {
 				return nil, fmt.Errorf("write canary file %s: %w", outputPath, err)
 			}
 
@@ -217,32 +225,6 @@ func selectTemplate(templateDir, canaryType string) string {
 		return ""
 	}
 	return filepath.Join(templateDir, rel)
-}
-
-func generateFilename(canaryType, dir string) string {
-	nameMap := map[string][]string{
-		"ssh_key":              {"id_ed25519_deploy.old", "id_rsa_backup", "id_rsa_staging.bak"},
-		"config_backup":        {"settings_backup.env", "app.conf.bak", "config.yml.old"},
-		"db_dump":              {"pg_dump_prod_2024.sql.gz", "db_backup_latest.sql", "mysql_dump.tar.gz"},
-		"env_file":             {".env.production.bak", ".env.staging", "app_secrets.env"},
-		"credentials":          {".aws_credentials.bak", "service_account.json.old", "api_keys.txt"},
-		"kubeconfig_backup":    {"kubeconfig_backup.yaml", "admin.conf.bak"},
-		"serviceaccount_token": {"sa_token.bak", "default-token.old"},
-	}
-
-	names, ok := nameMap[canaryType]
-	if !ok || len(names) == 0 {
-		return fmt.Sprintf("canary_%s_%d", canaryType, time.Now().UnixNano())
-	}
-
-	// Pick a random name from the list
-	b := make([]byte, 1)
-	if _, err := rand.Read(b); err != nil {
-		// Fallback to time-based selection if rand fails
-		idx := time.Now().UnixNano() % int64(len(names))
-		return names[idx]
-	}
-	return names[int(b[0])%len(names)]
 }
 
 func renderTemplate(tmplPath string, data TemplateData) (string, error) {
