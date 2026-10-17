@@ -1,1 +1,0 @@
-{"virtualbox":{"/opt/sentinel/bin":{"guestpath":"/opt/sentinel/bin","hostpath":"D:/cadoc/bin","disabled":false,"__vagrantfile":true},"/opt/canary/src":{"guestpath":"/opt/canary/src","hostpath":"D:/cadoc/src","disabled":false,"__vagrantfile":true},"/vagrant":{"guestpath":"/vagrant","hostpath":"D:/cadoc/test-env","disabled":false,"__vagrantfile":true}}}
