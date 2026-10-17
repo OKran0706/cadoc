@@ -92,7 +92,8 @@ $CURL "${SERVER}/downloads/sentinel-assets.tar.gz" -o "${TMP}/assets.tar.gz"
 mkdir -p /opt/sentinel/templates "${INSTALL_DIR}/config" "${INSTALL_DIR}/deployed"
 tar -xzf "${TMP}/assets.tar.gz" -C "$TMP"
 cp -r "${TMP}/templates/." /opt/sentinel/templates/
-cp -r "${TMP}/profiles/." "${INSTALL_DIR}/config/"
+mkdir -p "${INSTALL_DIR}/config/profiles"
+cp -r "${TMP}/profiles/." "${INSTALL_DIR}/config/profiles/"   # deployer.LoadProfile reads <config>/profiles/<name>.yaml
 
 # Stop a running agent before replacing its binary (idempotent re-runs).
 systemctl stop sentinel.service 2>/dev/null || true
@@ -163,7 +164,7 @@ echo "[*] Installing systemd unit..."
 # Validate inputs that are interpolated into the unit file.
 case "$PROFILE" in app-server|db-server|k8s-node) ;; *) echo "ERROR: unknown --profile '$PROFILE'." >&2; exit 2 ;; esac
 case "$INTERVAL" in ''|*[!0-9]*) echo "ERROR: --interval must be seconds (integer)." >&2; exit 2 ;; esac
-PROFILE_FILE="${INSTALL_DIR}/config/${PROFILE}.yaml"
+PROFILE_FILE="${INSTALL_DIR}/config/profiles/${PROFILE}.yaml"
 [ -f "$PROFILE_FILE" ] || { echo "ERROR: profile file ${PROFILE_FILE} missing from assets." >&2; exit 1; }
 
 # Decoy target directories from the profile. They must exist and be writable under
