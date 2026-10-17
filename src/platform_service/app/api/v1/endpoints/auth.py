@@ -1,3 +1,4 @@
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -20,6 +21,8 @@ class LoginRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str
+    role: str = "user"
+    roles: List[str] = []
 
 @router.post("/login", response_model=TokenResponse)
 async def login(req: LoginRequest, request: Request, db: AsyncSession = Depends(get_db_session)):
@@ -52,7 +55,7 @@ async def login(req: LoginRequest, request: Request, db: AsyncSession = Depends(
 
     if req.company_slug == "global":
         result = await db.execute(
-            text("SELECT id, email, display_name, password_hash FROM public.global_admins WHERE email = :email AND status = 'active'"),
+            text("SELECT id, email, display_name, password_hash, 'platform_owner' AS role FROM public.global_admins WHERE email = :email AND status = 'active'"),
             {"email": req.email}
         )
         user = result.fetchone()
@@ -64,7 +67,21 @@ async def login(req: LoginRequest, request: Request, db: AsyncSession = Depends(
 
         await set_tenant_search_path(db, clean_slug)
         result = await db.execute(
-            text(f'SELECT id, email, display_name, password_hash FROM "client_{clean_slug}".users WHERE email = :email'),
+            text(f"""
+                SELECT 
+                    u.id, 
+                    u.email, 
+                    u.display_name, 
+                    u.password_hash,
+                    (
+                        SELECT array_agg(r.name) 
+                        FROM "client_{clean_slug}".user_roles ur 
+                        JOIN "client_{clean_slug}".roles r ON r.id = ur.role_id 
+                        WHERE ur.user_id = u.id
+                    ) AS roles
+                FROM "client_{clean_slug}".users u 
+                WHERE u.email = :email
+            """),
             {"email": req.email}
         )
         user = result.fetchone()
@@ -109,14 +126,47 @@ async def login(req: LoginRequest, request: Request, db: AsyncSession = Depends(
         except Exception:
             pass
 
+    # Resolve user role(s)
+    if req.company_slug == "global":
+        role_attr = getattr(user, "role", None)
+        roles_attr = getattr(user, "roles", None)
+        if isinstance(role_attr, str) and role_attr:
+            user_role = role_attr
+            user_roles = [role_attr]
+        elif isinstance(roles_attr, (list, tuple)) and roles_attr:
+            user_roles = [str(r) for r in roles_attr if r]
+            user_role = user_roles[0] if user_roles else "platform_owner"
+        else:
+            user_role = "platform_owner"
+            user_roles = ["platform_owner"]
+    else:
+        roles_attr = getattr(user, "roles", None)
+        role_attr = getattr(user, "role", None)
+        if isinstance(roles_attr, (list, tuple)) and roles_attr:
+            user_roles = [str(r) for r in roles_attr if r]
+            user_role = user_roles[0] if user_roles else "user"
+        elif isinstance(role_attr, str) and role_attr:
+            user_role = role_attr
+            user_roles = [role_attr]
+        else:
+            user_role = "user"
+            user_roles = ["user"]
+
     payload = {
         "sub": str(user.id),
         "email": user.email,
         "name": user.display_name,
         "company_slug": req.company_slug,
+        "role": user_role,
+        "roles": user_roles,
         "iat": int(time.time()),
         "exp": int(time.time()) + (settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60)
     }
     
     token = jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
-    return TokenResponse(access_token=token, token_type="bearer")
+    return TokenResponse(
+        access_token=token,
+        token_type="bearer",
+        role=user_role,
+        roles=user_roles
+    )
