@@ -29,16 +29,23 @@ const (
 	mutationOdds = 4 // 1-in-N chance to prefer a sibling-derived backup name
 )
 
-// namePools are the static per-type names (the pre-existing realistic list). They seed the model
+// namePools are the static per-type names: banking/fintech assets, so every profile reads as a bank. They seed the model
 // when a directory has too few siblings to learn from, and back the non-ML strategies.
 var namePools = map[string][]string{
-	"ssh_key":              {"id_ed25519_deploy.old", "id_rsa_backup", "id_rsa_staging.bak"},
-	"config_backup":        {"settings_backup.env", "app.conf.bak", "config.yml.old"},
-	"db_dump":              {"pg_dump_prod_2024.sql.gz", "db_backup_latest.sql", "mysql_dump.tar.gz"},
-	"env_file":             {".env.production.bak", ".env.staging", "app_secrets.env"},
-	"credentials":          {".aws_credentials.bak", "service_account.json.old", "api_keys.txt"},
-	"kubeconfig_backup":    {"kubeconfig_backup.yaml", "admin.conf.bak"},
-	"serviceaccount_token": {"sa_token.bak", "default-token.old"},
+	"ssh_key": {"pci_dss_token_vault.key", "hsm_wrapping_key_backup.pem", "swift_lau_signing_key.pem.old",
+		"card_pin_block_zpk.key.bak", "payment_gateway_tls_2025.key", "tokenization_master.key.old", "issuer_cvk_backup.pem"},
+	"config_backup": {"payment_switch_prod.env.bak", "ach_batch_scheduler.env.old", "fx_rates_feed.env.bak",
+		"treasury_gateway.env", "card_issuer_processor.env.old", "recon_engine_prod.env.bak", "ledger_sync_worker.env"},
+	"db_dump": {"ach_wire_staging_2025.sql.gz", "core_banking_ledger_2025q3.sql.gz", "kyc_customer_master_export.sql",
+		"card_transactions_archive_2025.sql.gz", "nostro_vostro_recon_dump.sql", "loan_origination_prod.sql.gz", "sanctions_screening_backup.tar.gz"},
+	"env_file": {"swift_mt103_gateway.env", "swift_alliance_access.env.bak", "core_banking_api.env",
+		"payments_hub_prod.env.old", ".env.payments", ".env.treasury", "sepa_instant_gateway.env"},
+	"credentials": {"core_banking_clearing_creds.json", "nostro_account_api_keys.json.old", "card_processor_credentials.json",
+		"swift_service_bureau_auth.json.bak", "rtgs_participant_creds.json", "upi_psp_credentials.json.old", "payment_hub_oauth_clients.json"},
+	"kubeconfig_backup": {"payments-cluster-admin.conf.bak", "treasury-gateway.conf", "core-banking-cluster.conf.old",
+		"swift-gw-prod.conf.bak", "settlement-cluster.conf", "card-switch-admin.conf.old"},
+	"serviceaccount_token": {"swift_alliance_signing.key.old", "clearing_hsm_session.pem.bak", "treasury_api_signing.key",
+		"nostro_recon_service.pem", "payments_gateway_client.key.bak", "upi_switch_signing.pem"},
 }
 
 var (

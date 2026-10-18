@@ -2,7 +2,7 @@
 # install-sentinel.sh - standalone Sentinel agent installer (no repo checkout needed).
 #
 #   curl -fsSLk https://<backend>/install.sh | sudo bash -s -- \
-#       --token <join-jwt> --server https://<backend> --client-id <slug>.<server-id> --ca-sha256 <hex>  [--profile app-server|db-server|k8s-node] [--interval seconds] [--jitter seconds]
+#       --token <join-jwt> --server https://<backend> --client-id <slug>.<server-id> --ca-sha256 <hex>  [--profile app-server|db-server|k8s-node|bfsi-payments] [--interval seconds] [--jitter seconds]
 #
 # Downloads the binary + assets from <backend>/downloads, pins the Canary CA by
 # SHA-256, writes config, installs auditd rules + systemd unit, starts the agent,
@@ -180,7 +180,7 @@ service auditd restart || systemctl restart auditd || true
 # --- systemd unit ---
 echo "[*] Installing systemd unit..."
 # Validate inputs that are interpolated into the unit file.
-case "$PROFILE" in app-server|db-server|k8s-node) ;; *) echo "ERROR: unknown --profile '$PROFILE'." >&2; exit 2 ;; esac
+case "$PROFILE" in app-server|db-server|k8s-node|bfsi-payments) ;; *) echo "ERROR: unknown --profile '$PROFILE'." >&2; exit 2 ;; esac
 case "$INTERVAL" in ''|*[!0-9]*) echo "ERROR: --interval must be seconds (integer)." >&2; exit 2 ;; esac
 case "$JITTER" in ''|*[!0-9]*) echo "ERROR: --jitter must be seconds (integer)." >&2; exit 2 ;; esac
 PROFILE_FILE="${INSTALL_DIR}/config/profiles/${PROFILE}.yaml"

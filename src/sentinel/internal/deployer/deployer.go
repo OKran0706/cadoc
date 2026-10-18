@@ -81,6 +81,26 @@ func (td TemplateData) RandomHex(n int) string {
 	return sysutil.RandomHex(n)
 }
 
+// RandomDigits returns a random string of n decimal digits (account and reference numbers).
+func (td TemplateData) RandomDigits(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		log.Fatalf("Critical entropy failure during RandomDigits generation: %v", err)
+	}
+	for i := range buf {
+		buf[i] = '0' + buf[i]%10
+	}
+	return string(buf)
+}
+
+// FakeIBAN returns a synthetic GB-style IBAN (not checksum-valid).
+func (td TemplateData) FakeIBAN() string {
+	return "GB" + td.RandomDigits(2) + strings.ToUpper(td.RandomAlpha(4)) + td.RandomDigits(14)
+}
+
 // FakeSSHKeyBody returns a base64 block resembling an SSH private key body.
 func (td TemplateData) FakeSSHKeyBody() string {
 	buf := make([]byte, 256)
@@ -215,7 +235,7 @@ func selectTemplate(templateDir, canaryType string) string {
 		"config_backup":      "configs/env_file.tmpl",
 		"db_dump":            "dumps/pg_dump.tmpl",
 		"env_file":           "configs/env_file.tmpl",
-		"credentials":        "credentials/aws_credentials.tmpl",
+		"credentials":        "credentials/clearing_credentials.tmpl",
 		"kubeconfig_backup":  "configs/env_file.tmpl",
 		"serviceaccount_token": "keys/ssh_private_key.tmpl",
 	}

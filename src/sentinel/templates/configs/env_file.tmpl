@@ -1,9 +1,13 @@
-{{- /* canary-system/src/canary_deployer/templates/configs/env_file.tmpl */ -}}
-{{- /* Derived from: file-canary-engine/SKILL.md — Content Templates */ -}}
-# Application environment — {{.AppName}} {{.BlendedDate}}
-DATABASE_URL=postgres://{{.RandomAlpha 8}}:{{.RandomBase64 16}}@db-prod.internal/{{.RandomAlpha 6}}
-SECRET_KEY={{.RandomBase64 48}}
-API_KEY={{.RandomHex 32}}
-REDIS_URL=redis://default:{{.RandomBase64 24}}@redis.internal:6379/0
-SMTP_PASSWORD={{.RandomBase64 20}}
+{{- /* Payments gateway environment (SWIFT / payment switch) */ -}}
+# Payments gateway environment — {{.AppName}} {{.BlendedDate}}
+SWIFT_BIC=MRDNGB2L
+SWIFT_ALLIANCE_URL=https://alliance-gw.payments.internal:48002
+SWIFT_MESSAGE_TYPE=MT103
+SWIFT_QUEUE=mt103.outbound.prod
+SWIFT_LAU_KEY={{.RandomHex 32}}
+SWIFT_OPERATOR_PASSWORD={{.RandomBase64 20}}
+PAYMENT_SWITCH_API_KEY={{.RandomHex 32}}
+CLEARING_ACCOUNT={{.FakeIBAN}}
+DATABASE_URL=postgres://payments_svc:{{.RandomBase64 16}}@ledger-db.internal/core_banking
+HSM_PIN={{.RandomDigits 8}}
 DEBUG=false

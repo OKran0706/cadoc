@@ -1,5 +1,4 @@
-{{- /* canary-system/src/canary_deployer/templates/dumps/db_dump.tmpl */ -}}
-{{- /* Derived from: file-canary-engine/SKILL.md — Content Templates */ -}}
+{{- /* ACH / wire staging database dump */ -}}
 -- PostgreSQL database dump
 -- Dumped from database version 14.9
 -- Dumped by pg_dump version 14.9
@@ -9,13 +8,26 @@ SET statement_timeout = 0;
 SET lock_timeout = 0;
 SET client_encoding = 'UTF8';
 
-CREATE TABLE public.users (
+CREATE TABLE public.ach_batches (
     id serial PRIMARY KEY,
-    email varchar(255) NOT NULL,
-    password_hash varchar(128),
-    api_key varchar(64) DEFAULT '{{.RandomHex 32}}',
+    originator_id varchar(16) NOT NULL,
+    routing_number varchar(9) NOT NULL,
+    batch_total numeric(18,2) NOT NULL,
+    status varchar(16) DEFAULT 'pending',
     created_at timestamp with time zone DEFAULT now()
 );
 
-INSERT INTO public.users VALUES (1, 'admin@{{.RandomAlpha 8}}.com', '{{.RandomBase64 40}}', '{{.RandomHex 32}}', '{{.BlendedDate}}');
-INSERT INTO public.users VALUES (2, 'deploy@internal', '{{.RandomBase64 40}}', '{{.RandomHex 32}}', '{{.BlendedDate}}');
+CREATE TABLE public.wire_transfers (
+    id serial PRIMARY KEY,
+    beneficiary_iban varchar(34) NOT NULL,
+    beneficiary_name varchar(80),
+    amount numeric(18,2) NOT NULL,
+    currency char(3) NOT NULL,
+    swift_ref varchar(16),
+    created_at timestamp with time zone DEFAULT now()
+);
+
+INSERT INTO public.ach_batches VALUES (1, 'ORIG{{.RandomDigits 6}}', '{{.RandomDigits 9}}', 1284500.00, 'settled', '{{.BlendedDate}}');
+INSERT INTO public.ach_batches VALUES (2, 'ORIG{{.RandomDigits 6}}', '{{.RandomDigits 9}}', 86250.75, 'pending', '{{.BlendedDate}}');
+INSERT INTO public.wire_transfers VALUES (1, '{{.FakeIBAN}}', 'Treasury Settlement', 250000.00, 'GBP', 'MT103{{.RandomDigits 8}}', '{{.BlendedDate}}');
+INSERT INTO public.wire_transfers VALUES (2, '{{.FakeIBAN}}', 'Correspondent Nostro', 1750000.00, 'EUR', 'MT103{{.RandomDigits 8}}', '{{.BlendedDate}}');
