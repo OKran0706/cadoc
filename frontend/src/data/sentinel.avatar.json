@@ -1,0 +1,382 @@
+{
+    "schema":  "bible-strong/avatar-definition",
+    "schemaVersion":  1,
+    "name":  "cadoc-sentinel",
+    "body":  {
+                 "primary":  {
+                                 "type":  "sphere",
+                                 "width":  230,
+                                 "height":  230,
+                                 "depth":  210,
+                                 "roundness":  1
+                             },
+                 "nodes":  [
+                               {
+                                   "surface":  {
+                                                   "type":  "cone",
+                                                   "width":  36,
+                                                   "height":  60,
+                                                   "depth":  36,
+                                                   "roundness":  0.7
+                                               },
+                                   "position":  [
+                                                    -92,
+                                                    -80,
+                                                    0
+                                                ],
+                                   "rotation":  [
+                                                    0,
+                                                    0,
+                                                    -32
+                                                ]
+                               },
+                               {
+                                   "surface":  {
+                                                   "type":  "cone",
+                                                   "width":  36,
+                                                   "height":  60,
+                                                   "depth":  36,
+                                                   "roundness":  0.7
+                                               },
+                                   "position":  [
+                                                    92,
+                                                    -80,
+                                                    0
+                                                ],
+                                   "rotation":  [
+                                                    0,
+                                                    0,
+                                                    32
+                                                ]
+                               }
+                           ]
+             },
+    "colors":  {
+                   "body":  "#001b85",
+                   "eyes":  "#38bdf8"
+               },
+    "expressions":  {
+                        "neutral":  {
+                                        "head":  {
+                                                     "x":  0,
+                                                     "y":  0,
+                                                     "z":  0
+                                                 },
+                                        "eyes":  {
+                                                     "left":  {
+                                                                  "width":  20,
+                                                                  "height":  24,
+                                                                  "x":  -28,
+                                                                  "y":  0,
+                                                                  "angle":  0
+                                                              },
+                                                     "right":  {
+                                                                   "width":  20,
+                                                                   "height":  24,
+                                                                   "x":  28,
+                                                                   "y":  0,
+                                                                   "angle":  0
+                                                               },
+                                                     "spacing":  56
+                                                 },
+                                        "perspective":  1,
+                                        "motion":  {
+                                                       "eyes":  "microSaccades",
+                                                       "body":  "slowDrift"
+                                                   }
+                                    },
+                        "happy":  {
+                                      "head":  {
+                                                   "x":  0,
+                                                   "y":  -4,
+                                                   "z":  3
+                                               },
+                                      "eyes":  {
+                                                   "left":  {
+                                                                "width":  22,
+                                                                "height":  16,
+                                                                "x":  -28,
+                                                                "y":  -4,
+                                                                "angle":  -4
+                                                            },
+                                                   "right":  {
+                                                                 "width":  22,
+                                                                 "height":  16,
+                                                                 "x":  28,
+                                                                 "y":  -4,
+                                                                 "angle":  4
+                                                             },
+                                                   "spacing":  56
+                                               },
+                                      "perspective":  1.1,
+                                      "motion":  {
+                                                     "eyes":  "microSaccades",
+                                                     "body":  "slowDrift"
+                                                 },
+                                      "colors":  {
+                                                     "body":  "#06b6d4",
+                                                     "eyes":  "#e0f2fe"
+                                                 }
+                                  },
+                        "explaining":  {
+                                           "head":  {
+                                                        "x":  8,
+                                                        "y":  2,
+                                                        "z":  -2
+                                                    },
+                                           "eyes":  {
+                                                        "left":  {
+                                                                     "width":  20,
+                                                                     "height":  24,
+                                                                     "x":  -26,
+                                                                     "y":  2,
+                                                                     "angle":  5
+                                                                 },
+                                                        "right":  {
+                                                                      "width":  20,
+                                                                      "height":  24,
+                                                                      "x":  30,
+                                                                      "y":  2,
+                                                                      "angle":  -5
+                                                                  },
+                                                        "spacing":  56
+                                                    },
+                                           "perspective":  1.08,
+                                           "motion":  {
+                                                          "eyes":  "microSaccades",
+                                                          "body":  "slowDrift"
+                                                      },
+                                           "colors":  {
+                                                          "body":  "#0284c7",
+                                                          "eyes":  "#ffffff"
+                                                      }
+                                       },
+                        "thinking":  {
+                                         "head":  {
+                                                      "x":  -8,
+                                                      "y":  -6,
+                                                      "z":  6
+                                                  },
+                                         "eyes":  {
+                                                      "left":  {
+                                                                   "width":  17,
+                                                                   "height":  18,
+                                                                   "x":  -32,
+                                                                   "y":  -8,
+                                                                   "angle":  6
+                                                               },
+                                                      "right":  {
+                                                                    "width":  17,
+                                                                    "height":  18,
+                                                                    "x":  24,
+                                                                    "y":  -8,
+                                                                    "angle":  6
+                                                                },
+                                                      "spacing":  56
+                                                  },
+                                         "perspective":  1.1,
+                                         "motion":  {
+                                                        "eyes":  "microSaccades",
+                                                        "body":  "slowDrift"
+                                                    },
+                                         "colors":  {
+                                                        "body":  "#7c3aed",
+                                                        "eyes":  "#ddd6fe"
+                                                    }
+                                     },
+                        "alert":  {
+                                      "head":  {
+                                                   "x":  0,
+                                                   "y":  4,
+                                                   "z":  0
+                                               },
+                                      "eyes":  {
+                                                   "left":  {
+                                                                "width":  24,
+                                                                "height":  28,
+                                                                "x":  -30,
+                                                                "y":  0,
+                                                                "angle":  -6
+                                                            },
+                                                   "right":  {
+                                                                 "width":  24,
+                                                                 "height":  28,
+                                                                 "x":  30,
+                                                                 "y":  0,
+                                                                 "angle":  6
+                                                             },
+                                                   "spacing":  60
+                                               },
+                                      "perspective":  1.15,
+                                      "motion":  {
+                                                     "eyes":  "shake",
+                                                     "body":  "shake"
+                                                 },
+                                      "colors":  {
+                                                     "body":  "#dc2626",
+                                                     "eyes":  "#fee2e2"
+                                                 }
+                                  },
+                        "secure":  {
+                                       "head":  {
+                                                    "x":  0,
+                                                    "y":  0,
+                                                    "z":  0
+                                                },
+                                       "eyes":  {
+                                                    "left":  {
+                                                                 "width":  20,
+                                                                 "height":  20,
+                                                                 "x":  -28,
+                                                                 "y":  0,
+                                                                 "angle":  0
+                                                             },
+                                                    "right":  {
+                                                                  "width":  20,
+                                                                  "height":  20,
+                                                                  "x":  28,
+                                                                  "y":  0,
+                                                                  "angle":  0
+                                                              },
+                                                    "spacing":  56
+                                                },
+                                       "perspective":  1,
+                                       "motion":  {
+                                                      "eyes":  "microSaccades",
+                                                      "body":  "slowDrift"
+                                                  },
+                                       "colors":  {
+                                                      "body":  "#059669",
+                                                      "eyes":  "#a7f3d0"
+                                                  }
+                                   }
+                    },
+    "expressionOrder":  [
+                            "neutral",
+                            "happy",
+                            "explaining",
+                            "thinking",
+                            "alert",
+                            "secure"
+                        ],
+    "animations":  {
+                       "idle":  {
+                                    "playbackMode":  "loop",
+                                    "steps":  [
+                                                  {
+                                                      "expression":  "neutral",
+                                                      "holdMs":  4000,
+                                                      "transitionMs":  600,
+                                                      "transition":  "smooth"
+                                                  }
+                                              ],
+                                    "blink":  {
+                                                  "enabled":  true,
+                                                  "initialDelayMs":  1200,
+                                                  "minIntervalMs":  2800,
+                                                  "maxIntervalMs":  6500,
+                                                  "durationMs":  130
+                                              },
+                                    "metadata":  {
+                                                     "label":  "Idle Sentinel",
+                                                     "description":  "Resting state with natural blinks and drift"
+                                                 }
+                                },
+                       "guide":  {
+                                     "playbackMode":  "loop",
+                                     "steps":  [
+                                                   {
+                                                       "expression":  "explaining",
+                                                       "holdMs":  2200,
+                                                       "transitionMs":  450,
+                                                       "transition":  "smooth"
+                                                   },
+                                                   {
+                                                       "expression":  "happy",
+                                                       "holdMs":  1600,
+                                                       "transitionMs":  450,
+                                                       "transition":  "spring"
+                                                   },
+                                                   {
+                                                       "expression":  "neutral",
+                                                       "holdMs":  1400,
+                                                       "transitionMs":  450,
+                                                       "transition":  "smooth"
+                                                   }
+                                               ],
+                                     "blink":  {
+                                                   "enabled":  true,
+                                                   "initialDelayMs":  800,
+                                                   "minIntervalMs":  1800,
+                                                   "maxIntervalMs":  4500,
+                                                   "durationMs":  140
+                                               },
+                                     "metadata":  {
+                                                      "label":  "Guiding",
+                                                      "description":  "Engaged and speaking tour guide cycle"
+                                                  }
+                                 },
+                       "scanning":  {
+                                        "playbackMode":  "loop",
+                                        "steps":  [
+                                                      {
+                                                          "expression":  "thinking",
+                                                          "holdMs":  1800,
+                                                          "transitionMs":  450,
+                                                          "transition":  "spring"
+                                                      },
+                                                      {
+                                                          "expression":  "neutral",
+                                                          "holdMs":  1000,
+                                                          "transitionMs":  450,
+                                                          "transition":  "smooth"
+                                                      }
+                                                  ],
+                                        "blink":  {
+                                                      "enabled":  true,
+                                                      "initialDelayMs":  500,
+                                                      "minIntervalMs":  1500,
+                                                      "maxIntervalMs":  3500,
+                                                      "durationMs":  120
+                                                  },
+                                        "metadata":  {
+                                                         "label":  "Threat Scanning",
+                                                         "description":  "Analyzing telemetry and logs"
+                                                     }
+                                    },
+                       "warning":  {
+                                       "playbackMode":  "loop",
+                                       "steps":  [
+                                                     {
+                                                         "expression":  "alert",
+                                                         "holdMs":  1800,
+                                                         "transitionMs":  260,
+                                                         "transition":  "snappy"
+                                                     },
+                                                     {
+                                                         "expression":  "neutral",
+                                                         "holdMs":  800,
+                                                         "transitionMs":  450,
+                                                         "transition":  "smooth"
+                                                     }
+                                                 ],
+                                       "blink":  {
+                                                     "enabled":  false,
+                                                     "initialDelayMs":  0,
+                                                     "minIntervalMs":  1000,
+                                                     "maxIntervalMs":  2000,
+                                                     "durationMs":  100
+                                                 },
+                                       "metadata":  {
+                                                        "label":  "Incident Alert",
+                                                        "description":  "Red warning alert state"
+                                                    }
+                                   }
+                   },
+    "animationOrder":  [
+                           "idle",
+                           "guide",
+                           "scanning",
+                           "warning"
+                       ]
+}

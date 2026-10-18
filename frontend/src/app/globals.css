@@ -1,0 +1,120 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-primary: #001b85;
+  --color-primary-container: #002bbd;
+  --color-on-primary: #ffffff;
+  --color-on-primary-container: #9ba9ff;
+  --color-secondary: #575e72;
+  --color-secondary-container: #d9dff6;
+  --color-tertiary: #00303c;
+  --color-tertiary-container: #004858;
+  --color-surface: #f8f9fc;
+  --color-surface-container: #edeef1;
+  --color-surface-container-low: #f2f3f6;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-high: #e7e8eb;
+  --color-surface-container-highest: #e1e2e5;
+  --color-on-surface: #191c1e;
+  --color-on-surface-variant: #444655;
+  --color-error: #ba1a1a;
+  --color-error-container: #ffdad6;
+  --color-outline: #757686;
+  --color-outline-variant: #c5c5d7;
+
+  --font-headline: var(--font-inter), "Inter", sans-serif;
+  --font-body: var(--font-inter), "Inter", sans-serif;
+  --font-label: var(--font-inter), "Inter", sans-serif;
+}
+
+body {
+  background-color: var(--color-surface);
+  color: var(--color-on-surface);
+  font-family: var(--font-inter), "Inter", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(24px);
+  border: 1px solid rgba(197, 197, 215, 0.15);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-outline-variant);
+  border-radius: 10px;
+}
+
+/* Animated border ring for stat cards on hover */
+@property --border-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes rotate-border {
+  to { --border-angle: 360deg; }
+}
+
+/* Outer wrapper — carries the spinning gradient */
+.stat-card {
+  position: relative;
+  border-radius: 1rem;
+  padding: 2px;
+  animation: rotate-border 2.5s linear infinite;
+}
+
+.stat-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 1rem;
+  background: conic-gradient(
+    from var(--border-angle),
+    #001b85 0%,
+    #334ed9 25%,
+    #bac3ff 50%,
+    #334ed9 75%,
+    #001b85 100%
+  );
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  z-index: 0;
+}
+
+.stat-card:hover::before {
+  opacity: 1;
+}
+
+/* Inner card — white bg covers the gradient center, only the 2px ring shows */
+.stat-card-inner {
+  position: relative;
+  z-index: 1;
+  border-radius: calc(1rem - 2px);
+  height: 100%;
+  width: 100%;
+}
+
+/* Modal entrance animation */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Live log entry animation */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Verification progress bar */
+@keyframes progress {
+  from { width: 0%; }
+  to   { width: 100%; }
+}

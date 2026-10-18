@@ -1,0 +1,9 @@
+Hello judges! I am Karan from Team Sentinels. Today, I am presenting CADOC—a smart cyber trap system built to protect bank servers
+
+In banking, conventional fraud engines evaluate transactions, meaning they fire after money has already moved. But in major heists like the $81M Bangladesh Bank breach, attackers spent weeks quietly reconnaissance—reading SWIFT configs and credentials on core servers before initiating transfers.
+
+CADOC solves this by planting realistic decoys—like fake SWIFT configs, clearing credentials, and HSM key backups—directly inside critical banking hosts. Because legitimate workflows never touch these files, the very first touch is a 100% high-confidence breach signal.
+
+Existing SIEM and EDR solutions drown security analysts in thousands of noisy alerts. CADOC eliminates noise because only an intruder touches a decoy.
+
+Our USP lies in bank-specific decoys, lightweight edge deployment, and surgical containment that stops the attacker without pulling the network cable on high-availability payment systems

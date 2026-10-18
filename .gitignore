@@ -66,3 +66,6 @@ test-env/test-agg
 *.pdf
 *.ppt
 *.pptx
+
+# Secrets
+server-keys/id_ed25519
