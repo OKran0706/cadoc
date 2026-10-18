@@ -97,7 +97,7 @@ if [ ! -f ".env" ]; then
 fi
 
 # Ensure PUBLIC_BASE_URL is set (used in the UI install command)
-grep -q "^PUBLIC_BASE_URL=" .env || echo "PUBLIC_BASE_URL=https://${PUBLIC_HOST}" >> .env
+grep -q "^PUBLIC_BASE_URL=" .env || echo "PUBLIC_BASE_URL=https://${PUBLIC_IP}" >> .env
 
 # 4. Pull and build containers
 echo "[+] Starting Cadoc services with docker compose..."

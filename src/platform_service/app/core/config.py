@@ -50,7 +50,7 @@ class Settings(BaseSettings):
 
     # Public origin agents use for download, bootstrap and ingest (single port 443).
     PUBLIC_BASE_URL: str = Field(
-        "https://ec2-3-89-18-5.compute-1.amazonaws.com",
+        "https://3.89.18.5",
         validation_alias=AliasChoices("PUBLIC_BASE_URL")
     )
     CA_CERT_PATH: str = Field(

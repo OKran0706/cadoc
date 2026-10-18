@@ -61,3 +61,8 @@ mock-server*.log
 .vagrant/
 test-env/sentinel-a
 test-env/test-agg
+
+# Documents and presentations
+*.pdf
+*.ppt
+*.pptx

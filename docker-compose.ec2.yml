@@ -122,7 +122,7 @@ services:
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:?Admin Password required}
       ENABLE_RATE_LIMIT: "true"
       PROJECT_NAME: "Cadoc Platform (AWS EC2)"
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://ec2-3-89-18-5.compute-1.amazonaws.com}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://3.89.18.5}
       CA_CERT_PATH: /certs/ca.crt
       KAFKA_BOOTSTRAP_SERVERS: "redpanda:9092"
       KAFKA_TOPIC: "canary-events"
