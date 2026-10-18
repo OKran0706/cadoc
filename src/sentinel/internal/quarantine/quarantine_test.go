@@ -13,6 +13,7 @@ import (
 
 type fakeProc struct {
 	exe     map[int]string
+	comm    map[int]string
 	killed  []int
 	killErr error
 }
@@ -27,6 +28,13 @@ func (f *fakeProc) deps() Deps {
 				return "", errors.New("no such process")
 			}
 			return e, nil
+		},
+		ReadComm: func(pid int) (string, error) {
+			c, ok := f.comm[pid]
+			if !ok {
+				return "", errors.New("no such process")
+			}
+			return c, nil
 		},
 		Kill: func(pid int) error {
 			f.killed = append(f.killed, pid)
@@ -163,5 +171,76 @@ func TestPollExecutesAndReports(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("no report")
+	}
+}
+
+func killAct(pid int, ppid int, pcomm string) Action {
+	return Action{Action: "KILL_PROCESS", PID: pid, Exe: "/usr/bin/cat", PPID: ppid, ParentComm: pcomm}
+}
+
+// The offender (`cat`) exits in milliseconds, so ending its parent shell is what disconnects the user.
+func TestParentShellKilledWhenOffenderAlreadyGone(t *testing.T) {
+	f := &fakeProc{comm: map[int]string{3250287: "bash"}}
+	ok, msg := Execute(killAct(3250863, 3250287, "bash"), f.deps())
+	if !ok || len(f.killed) != 1 || f.killed[0] != 3250287 {
+		t.Fatalf("ok=%v killed=%v msg=%q", ok, f.killed, msg)
+	}
+}
+
+func TestBothKilledTargetFirst(t *testing.T) {
+	f := &fakeProc{exe: map[int]string{4921: "/usr/bin/cat"}, comm: map[int]string{300: "bash"}}
+	ok, _ := Execute(killAct(4921, 300, "bash"), f.deps())
+	if !ok || len(f.killed) != 2 || f.killed[0] != 4921 || f.killed[1] != 300 {
+		t.Fatalf("ok=%v killed=%v", ok, f.killed)
+	}
+}
+
+func TestParentNotKilledWhenCommDiffers(t *testing.T) {
+	f := &fakeProc{comm: map[int]string{300: "sshd"}} // pid reused by something else
+	ok, msg := Execute(killAct(4921, 300, "bash"), f.deps())
+	if ok || len(f.killed) != 0 || msg == "" {
+		t.Fatalf("ok=%v killed=%v msg=%q", ok, f.killed, msg)
+	}
+}
+
+func TestParentNotKilledWhenGone(t *testing.T) {
+	f := &fakeProc{}
+	if ok, _ := Execute(killAct(4921, 300, "bash"), f.deps()); ok || len(f.killed) != 0 {
+		t.Fatalf("killed=%v", f.killed)
+	}
+}
+
+func TestParentRefusals(t *testing.T) {
+	for name, ppid := range map[string]int{"init": 1, "zero": 0, "self": 100, "sentinel parent": 50, "negative": -4} {
+		t.Run(name, func(t *testing.T) {
+			f := &fakeProc{comm: map[int]string{ppid: "bash"}}
+			if _, _ = Execute(killAct(4921, ppid, "bash"), f.deps()); len(f.killed) != 0 {
+				t.Fatalf("must not kill ppid %d, killed %v", ppid, f.killed)
+			}
+		})
+	}
+}
+
+func TestParentNotAttemptedWithoutRecordedComm(t *testing.T) {
+	f := &fakeProc{comm: map[int]string{300: "bash"}}
+	Execute(killAct(4921, 300, ""), f.deps())
+	if len(f.killed) != 0 {
+		t.Fatalf("killed=%v", f.killed)
+	}
+}
+
+func TestParentKillErrorReportsFailure(t *testing.T) {
+	f := &fakeProc{comm: map[int]string{300: "bash"}, killErr: errors.New("operation not permitted")}
+	if ok, msg := Execute(killAct(4921, 300, "bash"), f.deps()); ok || msg == "" {
+		t.Fatalf("ok=%v msg=%q", ok, msg)
+	}
+}
+
+func TestUnsupportedActionNeverTouchesParent(t *testing.T) {
+	f := &fakeProc{comm: map[int]string{300: "bash"}}
+	a := killAct(4921, 300, "bash")
+	a.Action = "RM_RF"
+	if ok, _ := Execute(a, f.deps()); ok || len(f.killed) != 0 {
+		t.Fatalf("killed=%v", f.killed)
 	}
 }

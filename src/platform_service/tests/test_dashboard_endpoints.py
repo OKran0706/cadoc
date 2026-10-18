@@ -509,6 +509,10 @@ async def test_sse_stream_server_filter(monkeypatch):
         return
     monkeypatch.setattr(asyncio, "sleep", mock_sleep)
 
+    async def same_id(slug, sid):
+        return sid
+    monkeypatch.setattr("app.api.v1.endpoints.dashboard.canonical_server_id", same_id)
+
     headers = get_auth_headers("client-a")
     seen = []
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as ac:

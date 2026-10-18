@@ -16,30 +16,52 @@ import (
 )
 
 type Action struct {
-	Action  string `json:"action"`
-	PID     int    `json:"pid"`
-	Exe     string `json:"exe"`
-	AlertID string `json:"alert_id"`
+	Action     string `json:"action"`
+	PID        int    `json:"pid"`
+	Exe        string `json:"exe"`
+	AlertID    string `json:"alert_id"`
+	PPID       int    `json:"ppid,omitempty"`        // set only when the admin asked to also end the parent shell
+	ParentComm string `json:"parent_comm,omitempty"` // the parent's name when the alert fired, to catch pid reuse
 }
 
 // Deps are the OS hooks, injectable so the safety checks are testable off Linux.
 type Deps struct {
 	Self, Parent int
 	ReadExe      func(pid int) (string, error)
+	ReadComm     func(pid int) (string, error)
 	Kill         func(pid int) error
 }
 
-// Execute kills a.PID only if it is a safe target whose exe still matches. It returns whether the
-// process was killed and a short human-readable outcome for the dashboard.
+// Execute kills a.PID only if it is a safe target whose exe still matches and, when requested, the parent
+// shell a.PPID if its name still matches. It returns whether anything was killed and a short
+// human-readable outcome for the dashboard.
 func Execute(a Action, d Deps) (bool, string) {
-	switch {
-	case a.Action != "KILL_PROCESS":
+	if a.Action != "KILL_PROCESS" {
 		return false, "unsupported action"
-	case a.PID <= 1:
-		return false, fmt.Sprintf("refused: pid %d is not a valid target", a.PID)
-	case a.PID == d.Self || a.PID == d.Parent:
-		return false, fmt.Sprintf("refused: pid %d is the sentinel or its parent", a.PID)
-	case a.Exe == "":
+	}
+	ok, msg := killProcess(a, d)
+	if a.PPID == 0 && a.ParentComm == "" {
+		return ok, msg
+	}
+	pok, pmsg := killParent(a, d)
+	return ok || pok, msg + "; " + pmsg
+}
+
+func safeTarget(pid int, d Deps) string {
+	switch {
+	case pid <= 1:
+		return fmt.Sprintf("refused: pid %d is not a valid target", pid)
+	case pid == d.Self || pid == d.Parent:
+		return fmt.Sprintf("refused: pid %d is the sentinel or its parent", pid)
+	}
+	return ""
+}
+
+func killProcess(a Action, d Deps) (bool, string) {
+	if r := safeTarget(a.PID, d); r != "" {
+		return false, r
+	}
+	if a.Exe == "" {
 		return false, "refused: no exe recorded for identity check"
 	}
 	exe, err := d.ReadExe(a.PID)
@@ -53,6 +75,26 @@ func Execute(a Action, d Deps) (bool, string) {
 		return false, fmt.Sprintf("kill pid %d failed: %v", a.PID, err)
 	}
 	return true, fmt.Sprintf("killed pid %d (%s)", a.PID, a.Exe)
+}
+
+func killParent(a Action, d Deps) (bool, string) {
+	if r := safeTarget(a.PPID, d); r != "" {
+		return false, "parent " + r
+	}
+	if a.ParentComm == "" {
+		return false, "parent refused: no name recorded for identity check"
+	}
+	comm, err := d.ReadComm(a.PPID)
+	if err != nil {
+		return false, fmt.Sprintf("parent pid %d is gone: %v", a.PPID, err)
+	}
+	if comm != a.ParentComm {
+		return false, fmt.Sprintf("parent refused: pid %d is now %q, not %q (pid reused)", a.PPID, comm, a.ParentComm)
+	}
+	if err := d.Kill(a.PPID); err != nil {
+		return false, fmt.Sprintf("kill parent pid %d failed: %v", a.PPID, err)
+	}
+	return true, fmt.Sprintf("killed parent %s pid %d", comm, a.PPID)
 }
 
 // Client is the mTLS ingestion client (ingestclient.Client satisfies it).

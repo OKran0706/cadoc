@@ -77,6 +77,27 @@ async def set_tenant_search_path(session: AsyncSession, company_slug: str) -> st
         logger.error(f"Failed to switch tenant search path to {company_slug}: {exc}")
         raise
 
+def canonical_server_sql(slug: str, param: str) -> str:
+    """SQL expression mapping a client-supplied id to servers.id.
+
+    The UI shows the sentinel (agent) id, which after a re-add merge is an alias of the canonical server
+    that decoys/alerts are stored under. Falls back to the id unchanged. Bind `param` as a uuid."""
+    if not slug or not re.match(r"^[a-zA-Z0-9_-]+$", slug):
+        raise ValueError(f"Invalid company slug format: {slug}")
+    return (
+        f'COALESCE((SELECT a.server_id FROM "client_{slug}".server_aliases a WHERE a.alias_id = CAST(:{param} AS uuid)), '
+        f'(SELECT g.server_id FROM "client_{slug}".sentinel_agents g WHERE g.id = CAST(:{param} AS uuid)), '
+        f'CAST(:{param} AS uuid))'
+    )
+
+
+async def canonical_server_id(slug: str, server_id: str) -> str:
+    """Resolve `server_id` to the canonical servers.id (own short-lived session, safe to call before streaming)."""
+    async with async_session_factory() as session:
+        row = (await session.execute(text(f"SELECT {canonical_server_sql(slug, 'sid')}::text"), {"sid": server_id})).scalar()
+    return row or server_id
+
+
 async def get_db_session(request: Request = None) -> AsyncSession:
     """
     Yields an AsyncSession automatically scoped to the calling tenant if detected from request context.

@@ -36,6 +36,9 @@ func DropCapabilitiesAfterInit() error {
 	c.SetFlag(cap.Effective, true, cap.AUDIT_WRITE)
 	c.SetFlag(cap.Permitted, true, cap.AUDIT_READ)
 	c.SetFlag(cap.Effective, true, cap.AUDIT_READ)
+	// CAP_KILL: remote process quarantine signals other users' processes (exe/comm verified first).
+	c.SetFlag(cap.Permitted, true, cap.KILL)
+	c.SetFlag(cap.Effective, true, cap.KILL)
 	// Explicitly clear risky capabilities
 	c.SetFlag(cap.Permitted, false, cap.SYS_ADMIN)
 	c.SetFlag(cap.Effective, false, cap.SYS_ADMIN)

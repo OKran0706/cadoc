@@ -14,10 +14,11 @@ RestartSec=10
 
 # --- Capability Bounding ---
 # Run as root but drop all capabilities except those required for
-# Audit control (CAP_AUDIT_CONTROL), audit write (CAP_AUDIT_WRITE),
-# audit status read (CAP_AUDIT_READ), and network egress (CAP_NET_ADMIN).
-CapabilityBoundingSet=CAP_AUDIT_CONTROL CAP_NET_ADMIN CAP_AUDIT_WRITE CAP_AUDIT_READ
-AmbientCapabilities=CAP_AUDIT_CONTROL CAP_NET_ADMIN CAP_AUDIT_WRITE CAP_AUDIT_READ
+# Audit control (CAP_AUDIT_CONTROL), audit write (CAP_AUDIT_WRITE), audit status read
+# (CAP_AUDIT_READ), network egress (CAP_NET_ADMIN), and CAP_KILL so remote process
+# quarantine can signal other users' processes (identity is verified before every kill).
+CapabilityBoundingSet=CAP_AUDIT_CONTROL CAP_NET_ADMIN CAP_AUDIT_WRITE CAP_AUDIT_READ CAP_KILL
+AmbientCapabilities=CAP_AUDIT_CONTROL CAP_NET_ADMIN CAP_AUDIT_WRITE CAP_AUDIT_READ CAP_KILL
 
 # --- Filesystem Sandboxing ---
 # Protect system binaries (/usr, /boot) from modification but allow

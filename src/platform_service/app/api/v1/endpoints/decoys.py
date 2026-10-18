@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from uuid import UUID
 import re
-from app.core.database import get_db_session, set_tenant_search_path
+from app.core.database import canonical_server_sql, get_db_session, set_tenant_search_path
 from app.core.security import RequirePermission
 
 router = APIRouter()
@@ -54,7 +54,7 @@ async def list_decoys(
         conditions.append("status = :status")
         params["status"] = status
     if server_id:
-        conditions.append("server_id = CAST(:server_id AS uuid)")
+        conditions.append(f"server_id = {canonical_server_sql(company_slug, 'server_id')}")
         params["server_id"] = str(server_id)
     where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
         

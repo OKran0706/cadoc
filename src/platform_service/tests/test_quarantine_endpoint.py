@@ -114,3 +114,45 @@ async def test_get_alerts_includes_mitigation_status():
     assert resp.status_code == 200
     assert resp.json()["data"][0]["status"] == "QUARANTINE_REQUESTED"
     assert any("left join" in s and "alert_mitigations" in s for s in seen)
+
+
+PARENT = {"pid": 4921, "exe": "/usr/bin/cat", "ppid": 3250287, "parent_comm": "bash"}
+
+
+async def post_json(body):
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as ac:
+        return await ac.post(URL, json=body, headers=get_auth_headers("client-a"))
+
+
+@pytest.mark.asyncio
+async def test_kill_parent_adds_parent_to_queued_action(fake_redis):
+    wire_db(PARENT)
+    resp = await post_json({"kill_parent": True})
+    assert resp.status_code == 200
+    queued = json.loads(fake_redis.lists[f"pending_actions:client-a.{SERVER}"][0])
+    assert queued["ppid"] == 3250287 and queued["parent_comm"] == "bash" and queued["pid"] == 4921
+
+
+@pytest.mark.asyncio
+async def test_parent_not_included_by_default(fake_redis):
+    wire_db(PARENT)
+    assert (await post()).status_code == 200            # no body at all
+    assert (await post_json({"kill_parent": False})).status_code == 200
+    for raw in fake_redis.lists[f"pending_actions:client-a.{SERVER}"]:
+        assert "ppid" not in json.loads(raw)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", ["ppid", "parent_comm"])
+async def test_kill_parent_without_recorded_parent_is_400(fake_redis, missing):
+    d = {k: v for k, v in PARENT.items() if k != missing}
+    wire_db(d)
+    resp = await post_json({"kill_parent": True})
+    assert resp.status_code == 400 and not fake_redis.lists
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ppid", [0, 1, "300", True, None])
+async def test_kill_parent_rejects_unsafe_ppid(fake_redis, ppid):
+    wire_db({**PARENT, "ppid": ppid})
+    assert (await post_json({"kill_parent": True})).status_code == 400

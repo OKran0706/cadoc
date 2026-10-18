@@ -8,7 +8,8 @@ import "errors"
 func SystemDeps() Deps {
 	unsupported := errors.New("process quarantine requires linux")
 	return Deps{
-		ReadExe: func(int) (string, error) { return "", unsupported },
-		Kill:    func(int) error { return unsupported },
+		ReadExe:  func(int) (string, error) { return "", unsupported },
+		ReadComm: func(int) (string, error) { return "", unsupported },
+		Kill:     func(int) error { return unsupported },
 	}
 }

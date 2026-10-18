@@ -329,5 +329,6 @@ async def test_decoys_server_filter_binds_uuid_and_composes_with_status():
     assert bad.status_code == 422  # never reaches SQL
     assert ok.status_code == 200
     q = [c for c in local_mock_db.execute.call_args_list if "canary_decoy_files" in str(c.args[0])][-1]
-    assert "status = :status AND server_id = CAST(:server_id AS uuid)" in str(q.args[0])
+    assert "status = :status AND server_id = COALESCE(" in str(q.args[0])  # resolves merged-agent aliases
+    assert "CAST(:server_id AS uuid))" in str(q.args[0])
     assert q.args[1] == {"status": "planted", "server_id": sid}

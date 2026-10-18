@@ -386,13 +386,22 @@ async def get_killswitch(request: Request):
         raise HTTPException(status_code=500, detail="Failed to fetch killswitch state")
 
 
+def _is_pid(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and v > 1
+
+
 def _valid_action(a) -> bool:
-    return (
+    if not (
         isinstance(a, dict)
         and a.get("action") == "KILL_PROCESS"
-        and isinstance(a.get("pid"), int) and not isinstance(a["pid"], bool) and a["pid"] > 1
+        and _is_pid(a.get("pid"))
         and isinstance(a.get("exe"), str) and a["exe"]
-    )
+    ):
+        return False
+    # Optional "also end the parent shell": both fields or neither.
+    if "ppid" in a or "parent_comm" in a:
+        return _is_pid(a.get("ppid")) and isinstance(a.get("parent_comm"), str) and bool(a["parent_comm"])
+    return True
 
 
 @app.get("/control/actions")

@@ -189,3 +189,26 @@ def test_result_platform_failure_502(relay):
     relay.side_effect = RuntimeError("tok-secret")
     r = post_result(CERT, GOOD)
     assert r.status_code == 502 and "tok-secret" not in r.text
+
+
+# ---------------------------------------------------------------- optional parent-shell target
+
+WITH_PARENT = {**KILL, "ppid": 3250287, "parent_comm": "bash"}
+
+
+def test_parent_fields_pass_through_when_valid(queue):
+    queue[KEY] = [json.dumps(WITH_PARENT)]
+    assert get(CERT).json() == {"actions": [WITH_PARENT]}
+
+
+@pytest.mark.parametrize("extra", [
+    {"ppid": 1, "parent_comm": "init"},
+    {"ppid": "9", "parent_comm": "bash"},
+    {"ppid": True, "parent_comm": "bash"},
+    {"ppid": 300},
+    {"ppid": 300, "parent_comm": ""},
+    {"parent_comm": "bash"},
+])
+def test_invalid_parent_fields_drop_the_action(queue, extra):
+    queue[KEY] = [json.dumps({**KILL, **extra}), json.dumps(KILL)]
+    assert get(CERT).json() == {"actions": [KILL]}

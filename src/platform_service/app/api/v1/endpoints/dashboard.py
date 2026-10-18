@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from pydantic import BaseModel
 from app.core.config import settings
-from app.core.database import get_db_session, set_tenant_search_path
+from app.core.database import canonical_server_id, get_db_session, set_tenant_search_path
 from app.core.security import verify_user_jwt, RequirePermission, mint_sentinel_join_token
 from app.core.install import build_install_command
 import time
@@ -306,9 +306,18 @@ async def mitigate_alert(
 QUARANTINE_TTL_SECONDS = 300
 
 
+class QuarantinePayload(BaseModel):
+    kill_parent: bool = False  # also end the offender's parent shell (drops the user's terminal)
+
+
+def _is_pid(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and v > 1
+
+
 @router.post("/alerts/{alert_id}/quarantine")
 async def quarantine_alert(
     alert_id: str,
+    payload: Optional[QuarantinePayload] = None,
     db: AsyncSession = Depends(get_db_session),
     admin_claims: dict = Depends(RequirePermission("security.respond"))
 ):
@@ -333,8 +342,14 @@ async def quarantine_alert(
 
     details = alert.details if isinstance(alert.details, dict) else json.loads(alert.details or "{}")
     pid, exe = details.get("pid"), details.get("exe")
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1 or not exe:
+    if not _is_pid(pid) or not exe:
         raise HTTPException(status_code=400, detail="Alert has no killable process (pid/exe missing)")
+    parent = {}
+    if payload and payload.kill_parent:
+        ppid, parent_comm = details.get("ppid"), details.get("parent_comm")
+        if not _is_pid(ppid) or not parent_comm:
+            raise HTTPException(status_code=400, detail="Alert has no recorded parent process (ppid/parent_comm missing)")
+        parent = {"ppid": ppid, "parent_comm": parent_comm}
 
     # The agent's cert id is the server id or, after a re-add merge, one of its aliases.
     alias_res = await db.execute(
@@ -353,12 +368,12 @@ async def quarantine_alert(
                 target_exe = EXCLUDED.target_exe, target_comm = EXCLUDED.target_comm,
                 result_msg = NULL, updated_at = now()
         """),
-        {"alert_id": alert_id, "analyst_id": admin_claims["user_id"], "notes": "Process quarantine requested",
+        {"alert_id": alert_id, "analyst_id": admin_claims["user_id"], "notes": "Process quarantine requested" + (" (+ parent shell)" if parent else ""),
          "pid": pid, "exe": exe, "comm": details.get("comm")},
     )
     await db.commit()
 
-    action = json.dumps({"action": "KILL_PROCESS", "pid": pid, "exe": exe, "alert_id": alert_id})
+    action = json.dumps({"action": "KILL_PROCESS", "pid": pid, "exe": exe, "alert_id": alert_id, **parent})
     r = redis.from_url(settings.REDIS_URL, decode_responses=True)
     try:
         for agent_id in agent_ids:
@@ -442,6 +457,7 @@ async def get_summary_kpis(
 
 class NodeInventoryResponse(BaseModel):
     id: str
+    server_id: str
     hostname: Optional[str] = None
     location: str
     ip: str
@@ -466,23 +482,30 @@ async def list_nodes_inventory(
         
     await set_tenant_search_path(db, company_slug)
     
+    # One node per server: a re-enrolled host keeps its old (decommissioned) agent rows, so pick the best
+    # agent per server -- live beats offline beats decommissioned, newest breaks ties.
     sql = f"""
-        SELECT 
-            a.id as agent_id,
-            s.id as server_id,
-            s.hostname,
-            s.ip_address::text as ip,
-            COALESCE(s.specs->>'location', 'Unknown') as location,
-            a.status as agent_status,
-            (
-                SELECT COUNT(*) 
-                FROM "client_{company_slug}".tamper_alerts ta
-                WHERE ta.server_id = s.id 
-                  AND ta.id NOT IN (SELECT alert_id FROM "client_{company_slug}".alert_mitigations)
-            ) as threats
-        FROM "client_{company_slug}".sentinel_agents a
-        JOIN "client_{company_slug}".servers s ON s.id = a.server_id
-        ORDER BY s.hostname ASC
+        SELECT * FROM (
+            SELECT DISTINCT ON (s.id)
+                a.id as agent_id,
+                s.id as server_id,
+                s.hostname,
+                s.ip_address::text as ip,
+                COALESCE(s.specs->>'location', 'Unknown') as location,
+                a.status as agent_status,
+                (
+                    SELECT COUNT(*) 
+                    FROM "client_{company_slug}".tamper_alerts ta
+                    WHERE ta.server_id = s.id 
+                      AND ta.id NOT IN (SELECT alert_id FROM "client_{company_slug}".alert_mitigations)
+                ) as threats
+            FROM "client_{company_slug}".sentinel_agents a
+            JOIN "client_{company_slug}".servers s ON s.id = a.server_id
+            ORDER BY s.id,
+                     CASE a.status WHEN 'active' THEN 0 WHEN 'degraded' THEN 1 WHEN 'offline' THEN 2 ELSE 3 END,
+                     a.updated_at DESC
+        ) nodes
+        ORDER BY hostname ASC
     """
     result = await db.execute(text(sql))
     rows = result.fetchall()
@@ -513,6 +536,7 @@ async def list_nodes_inventory(
             
             nodes.append(NodeInventoryResponse(
                 id=str(row.agent_id),
+                server_id=str(row.server_id),
                 hostname=row.hostname,
                 location=row.location,
                 ip=row.ip,
@@ -827,6 +851,14 @@ async def get_alerts_stream(
     if company_slug == "global":
         raise HTTPException(status_code=400, detail="Scope mismatch: Endpoint requires tenant authorization context")
         
+    # Events carry the canonical server id; the UI may hold a (merged) agent id.
+    wanted = str(server_id) if server_id else None
+    if wanted:
+        try:
+            wanted = await canonical_server_id(company_slug, wanted)
+        except Exception:
+            pass  # match on the id as given
+
     async def event_generator():
         r = redis.from_url(settings.REDIS_URL, decode_responses=True)
         pubsub = r.pubsub()
@@ -840,7 +872,7 @@ async def get_alerts_stream(
                 if message:
                     try:
                         payload = json.loads(message["data"])
-                        if server_id and payload.get("server_id") != str(server_id):
+                        if wanted and payload.get("server_id") != wanted:
                             continue
                         yield f"data: {json.dumps(payload)}\n\n"
                     except Exception:
